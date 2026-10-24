@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Upload,
-  FileText,
   Trash2,
   Unlock,
   Lock,
@@ -37,6 +36,7 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
   currentUserUid,
 }) => {
   const [title, setTitle] = useState('');
+  const [titleError, setTitleError] = useState(false);
   const [area, setArea] = useState<EnemArea>('MT');
   const [questionCount, setQuestionCount] = useState<number>(45);
   const [isFreeTime, setIsFreeTime] = useState<boolean>(true);
@@ -51,8 +51,10 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
   const [resultsReleased, setResultsReleased] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const pdfInputRef = useRef<HTMLInputElement>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    setTitleError(false);
     if (editingSimulado) {
       setTitle(editingSimulado.title);
       setArea(editingSimulado.area);
@@ -89,7 +91,10 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
   }, [editingSimulado]);
 
   const handleQuestionCountChange = (nextVal: number) => {
-    const clamped = Math.max(1, Math.min(SCHEMA_LIMITS.MAX_QUESTIONS, nextVal || 1));
+    const clamped = Math.max(
+      1,
+      Math.min(SCHEMA_LIMITS.MAX_QUESTIONS, nextVal || 1)
+    );
     setQuestionCount(clamped);
     setAnswerKey((prev) => prev.padEnd(clamped, 'A').slice(0, clamped));
   };
@@ -130,7 +135,12 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim() || isUploadingPdf) return;
+    if (isUploadingPdf) return;
+    if (!title.trim()) {
+      setTitleError(true);
+      titleInputRef.current?.focus();
+      return;
+    }
     setIsSaving(true);
     try {
       const isNew = !editingSimulado;
@@ -168,20 +178,21 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
 
   return (
     <form
+      noValidate
       onSubmit={handleSubmit}
-      className="max-w-3xl mx-auto p-5 md:p-6 rounded-2xl bg-[#141220] border border-white/10 space-y-5"
+      className="max-w-3xl mx-auto p-5 md:p-6 pb-24 sm:pb-6 rounded-2xl bg-surface border border-line shadow-card space-y-5"
     >
-      <div className="flex items-center justify-between gap-4 pb-3 border-b border-white/10">
+      <div className="flex items-center justify-between gap-4 pb-3 border-b border-line">
         <button
           type="button"
           onClick={onCancel}
-          className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-300 hover:text-white cursor-pointer"
+          className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink-2 hover:text-ink cursor-pointer"
         >
-          <ArrowLeft className="w-4 h-4 text-[#3b82f6]" />
+          <ArrowLeft className="w-4 h-4 text-brand-soft" />
           Voltar
         </button>
 
-        <h3 className="text-sm font-bold text-white">
+        <h3 className="text-sm font-bold text-ink">
           {editingSimulado ? 'Editar Simulado' : 'Novo Simulado'}
         </h3>
       </div>
@@ -189,28 +200,40 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
       {/* Nome + Área ENEM */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="sm:col-span-2">
-          <label className="block text-xs font-medium text-slate-300 mb-1.5">
+          <label className="block text-xs font-medium text-ink-2 mb-1.5">
             Nome do simulado
           </label>
           <input
+            ref={titleInputRef}
             type="text"
-            required
             maxLength={SCHEMA_LIMITS.TITLE_MAX}
             value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            onChange={(e) => {
+              setTitle(e.target.value);
+              if (titleError && e.target.value.trim()) setTitleError(false);
+            }}
             placeholder="Ex: Simulado 01 — Matemática & Física"
-            className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-sm text-white focus:outline-none focus:border-[#3b82f6]"
+            className={`w-full px-3.5 py-2.5 rounded-xl bg-inset border text-sm text-ink focus:outline-none ${
+              titleError
+                ? 'border-danger focus:border-danger'
+                : 'border-line focus:border-brand-soft'
+            }`}
           />
+          {titleError && (
+            <p className="text-xs text-danger mt-1 font-medium">
+              Informe o nome do simulado.
+            </p>
+          )}
         </div>
 
         <div>
-          <label className="block text-xs font-medium text-slate-300 mb-1.5">
+          <label className="block text-xs font-medium text-ink-2 mb-1.5">
             Área TRI (ENEM 2025)
           </label>
           <select
             value={area}
             onChange={(e) => setArea(e.target.value as EnemArea)}
-            className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-sm text-white focus:outline-none focus:border-[#3b82f6]"
+            className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
           >
             {(Object.keys(ENEM_AREA_LABELS) as EnemArea[]).map((key) => (
               <option key={key} value={key}>
@@ -224,22 +247,21 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
       {/* Número de Questões + Tempo de Prova */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div>
-          <label className="block text-xs font-medium text-slate-300 mb-1.5">
+          <label className="block text-xs font-medium text-ink-2 mb-1.5">
             Número de questões
           </label>
           <input
             type="number"
             min={1}
             max={180}
-            required
             value={questionCount}
             onChange={(e) => handleQuestionCountChange(Number(e.target.value))}
-            className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-sm text-white font-mono focus:outline-none focus:border-[#3b82f6]"
+            className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink font-mono tabular-nums focus:outline-none focus:border-brand-soft"
           />
         </div>
 
         <div>
-          <label className="block text-xs font-medium text-slate-300 mb-1.5">
+          <label className="block text-xs font-medium text-ink-2 mb-1.5">
             Modo de tempo
           </label>
           <div className="grid grid-cols-2 gap-2">
@@ -248,8 +270,8 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
               onClick={() => setIsFreeTime(true)}
               className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
                 isFreeTime
-                  ? 'bg-[#2563eb] border-[#2563eb] text-white'
-                  : 'bg-[#0d0b14] border-white/10 text-slate-400'
+                  ? 'bg-brand border-brand text-white'
+                  : 'bg-inset border-line text-ink-muted hover:text-ink'
               }`}
             >
               Tempo Livre
@@ -259,8 +281,8 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
               onClick={() => setIsFreeTime(false)}
               className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
                 !isFreeTime
-                  ? 'bg-[#2563eb] border-[#2563eb] text-white'
-                  : 'bg-[#0d0b14] border-white/10 text-slate-400'
+                  ? 'bg-brand border-brand text-white'
+                  : 'bg-inset border-line text-ink-muted hover:text-ink'
               }`}
             >
               Definir Tempo
@@ -270,7 +292,7 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
 
         {!isFreeTime && (
           <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1.5">
+            <label className="block text-xs font-medium text-ink-2 mb-1.5">
               Tempo limite (minutos)
             </label>
             <input
@@ -279,7 +301,7 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
               max={600}
               value={timeLimitMinutes}
               onChange={(e) => setTimeLimitMinutes(Number(e.target.value))}
-              className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-sm text-white font-mono focus:outline-none focus:border-[#3b82f6]"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink font-mono tabular-nums focus:outline-none focus:border-brand-soft"
             />
           </div>
         )}
@@ -290,31 +312,31 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
         <div
           className={`p-3.5 rounded-xl border flex flex-col justify-center gap-2 transition-colors ${
             pdfUrl
-              ? 'bg-[#19142b] border-[#3b82f6]/50'
-              : 'bg-[#0d0b14] border-white/10'
+              ? 'bg-surface-2 border-brand-soft/50'
+              : 'bg-inset border-line'
           }`}
         >
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <span className="block text-xs font-medium text-slate-200">
+              <span className="block text-xs font-medium text-ink">
                 PDF da Prova (Opcional)
               </span>
               {isUploadingPdf ? (
-                <span className="mt-0.5 block text-xs font-semibold text-blue-300">
+                <span className="mt-0.5 block text-xs font-semibold text-accent-300">
                   Enviando PDF ({pdfUploadProgress}%)...
                 </span>
               ) : pdfUrl ? (
-                <span className="mt-0.5 flex items-center gap-1.5 text-xs text-emerald-300 font-medium truncate">
-                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
+                <span className="mt-0.5 flex items-center gap-1.5 text-xs text-success font-medium truncate">
+                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-success" />
                   <span className="truncate">{pdfTitle || 'Simulado.pdf'}</span>
                   {pdfSizeLabel && (
-                    <span className="text-[10px] font-mono text-slate-400 shrink-0">
+                    <span className="text-[10px] font-mono text-ink-muted shrink-0">
                       ({pdfSizeLabel})
                     </span>
                   )}
                 </span>
               ) : (
-                <span className="block text-[11px] text-slate-500">
+                <span className="block text-xs text-ink-muted">
                   Somente cartão de bolhas
                 </span>
               )}
@@ -329,7 +351,7 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
                     setPdfTitle('');
                     setPdfSizeLabel('');
                   }}
-                  className="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                  className="p-2 rounded-lg text-ink-muted hover:text-danger hover:bg-rose-500/10 transition-colors cursor-pointer"
                   title="Remover PDF"
                 >
                   <Trash2 className="w-4 h-4" />
@@ -348,10 +370,10 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
                 type="button"
                 disabled={isUploadingPdf}
                 onClick={() => pdfInputRef.current?.click()}
-                className="px-3.5 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                className="px-3.5 py-2 rounded-xl bg-brand hover:bg-brand-hover disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer"
               >
-                <Upload className="w-3.5 h-3.5" />
-                <span>
+                <Upload className="w-3.5 h-3.5 shrink-0" />
+                <span className="whitespace-nowrap">
                   {isUploadingPdf
                     ? `${pdfUploadProgress}%`
                     : pdfUrl
@@ -363,16 +385,16 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
           </div>
 
           {pdfUploadError && (
-            <span className="text-[11px] text-rose-400">{pdfUploadError}</span>
+            <span className="text-xs text-danger">{pdfUploadError}</span>
           )}
         </div>
 
-        <div className="p-3.5 rounded-xl bg-[#0d0b14] border border-white/10 flex items-center justify-between gap-3">
+        <div className="p-3.5 rounded-xl bg-inset border border-line flex items-center justify-between gap-3">
           <div>
-            <span className="block text-xs font-medium text-slate-200">
+            <span className="block text-xs font-medium text-ink">
               Notas TRI para os Alunos
             </span>
-            <span className="block text-[11px] text-slate-500">
+            <span className="block text-xs text-ink-muted">
               {resultsReleased ? 'Visíveis aos alunos' : 'Ocultas até liberar'}
             </span>
           </div>
@@ -382,8 +404,8 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
             onClick={() => setResultsReleased((prev) => !prev)}
             className={`px-3.5 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer ${
               resultsReleased
-                ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300'
-                : 'bg-white/10 text-slate-300'
+                ? 'bg-emerald-500/20 border border-emerald-500/40 text-success'
+                : 'bg-chip text-ink-2'
             }`}
           >
             {resultsReleased ? (
@@ -404,20 +426,20 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
       {/* Gabarito Oficial (Bolhas) */}
       <div className="space-y-2.5">
         <div className="flex items-center justify-between">
-          <span className="text-xs font-medium text-slate-300">
+          <span className="text-xs font-medium text-ink-2">
             Gabarito Oficial ({questionCount} questões)
           </span>
         </div>
 
-        <div className="max-h-72 overflow-y-auto p-3 rounded-xl bg-[#0d0b14] border border-white/10 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+        <div className="max-h-72 overflow-y-auto p-3 rounded-xl bg-inset border border-line grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
           {Array.from({ length: questionCount }, (_, idx) => {
             const currentAns = answerKey[idx] || 'A';
             return (
               <div
                 key={idx}
-                className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-[#141220] border border-white/5"
+                className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-surface-2 border border-line-soft"
               >
-                <span className="text-xs font-mono font-bold text-slate-300 tabular-nums w-7">
+                <span className="text-xs font-mono font-bold text-ink-2 tabular-nums w-7">
                   {String(idx + 1).padStart(2, '0')}
                 </span>
                 <div className="flex items-center gap-1">
@@ -430,8 +452,8 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
                         onClick={() => handleSetOfficialBubble(idx, opt)}
                         className={`w-6 h-6 rounded-full text-[11px] font-bold flex items-center justify-center transition-colors cursor-pointer ${
                           active
-                            ? 'bg-[#2563eb] text-white'
-                            : 'bg-[#070b14] text-slate-400 hover:text-white border border-white/10'
+                            ? 'bg-brand text-white'
+                            : 'bg-inset text-ink-muted hover:text-ink border border-line'
                         }`}
                       >
                         {opt}
@@ -449,16 +471,20 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
         <button
           type="button"
           onClick={onCancel}
-          className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-semibold transition-colors cursor-pointer"
+          className="px-4 py-2 rounded-xl bg-chip hover:bg-chip-hover text-ink-2 text-xs font-semibold transition-colors cursor-pointer"
         >
           Cancelar
         </button>
         <button
           type="submit"
           disabled={isSaving || isUploadingPdf}
-          className="px-5 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
+          className="px-5 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
         >
-          {isSaving ? 'Salvando...' : isUploadingPdf ? 'Aguarde o PDF...' : 'Salvar Simulado'}
+          {isSaving
+            ? 'Salvando...'
+            : isUploadingPdf
+              ? 'Aguarde o PDF...'
+              : 'Salvar Simulado'}
         </button>
       </div>
     </form>

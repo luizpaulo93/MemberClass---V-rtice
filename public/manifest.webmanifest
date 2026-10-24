@@ -1,0 +1,17 @@
+{
+  "name": "Curso Vértice — Área do Aluno",
+  "short_name": "Curso Vértice",
+  "description": "Plataforma de estudos Curso Vértice para Enem e vestibulares — Física, Química e Matemática.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#070b14",
+  "theme_color": "#070b14",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

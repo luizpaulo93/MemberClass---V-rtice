@@ -34,8 +34,52 @@ service cloud.firestore {
       );
     }
 
+    function emailLower() {
+      return request.auth.token.email.lower();
+    }
+
+    function myStudentId() {
+      return 'stu_' + emailLower().replace('[^a-z0-9]', '_');
+    }
+
+    function myStudentPath() {
+      return /databases/$(database)/documents/students/$(myStudentId());
+    }
+
+    function myStudent() {
+      return get(myStudentPath()).data;
+    }
+
+    function myTurmaPath() {
+      return /databases/$(database)/documents/turmas/$(myStudent().turmaId);
+    }
+
+    function isLiberatedStudent() {
+      return isVerifiedUser()
+        && request.auth.token.email != null
+        && exists(myStudentPath())
+        && ('turmaId' in myStudent())
+        && myStudent().status == 'active'
+        && exists(myTurmaPath())
+        && (get(myTurmaPath()).data.accessAll == true || get(myTurmaPath()).data.courseIds.size() > 0);
+    }
+
+    function myMentoriaPath() {
+      return /databases/$(database)/documents/mentorias/$(myStudentId());
+    }
+
+    function hasActiveMentoria() {
+      return isLiberatedStudent()
+        && exists(myMentoriaPath())
+        && get(myMentoriaPath()).data.status == 'active';
+    }
+
     function isValidStringArray(arr, maxItems) {
       return arr is list && arr.size() <= maxItems && (arr.size() == 0 || (arr[0] is string && arr[0].size() <= 128));
+    }
+
+    function isValidDateStr(s) {
+      return s is string && s.size() == 10 && s.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
     }
 
     function isValidPdfList(arr) {
@@ -216,15 +260,16 @@ service cloud.firestore {
       data.updatedAt is timestamp;
     }
 
+    // Simulado SEM gabarito (o gabarito mora em simuladoKeys)
     function isValidSimulado(data) {
       return data.keys().hasAll([
         'title', 'area', 'questionCount', 'timeLimitMinutes',
-        'pdfUrl', 'pdfTitle', 'answerKey', 'resultsReleased',
+        'pdfUrl', 'pdfTitle', 'resultsReleased',
         'isPublished', 'authorId', 'createdAt', 'updatedAt'
       ]) &&
       data.keys().hasOnly([
         'title', 'area', 'questionCount', 'timeLimitMinutes',
-        'pdfUrl', 'pdfTitle', 'answerKey', 'resultsReleased',
+        'pdfUrl', 'pdfTitle', 'resultsReleased',
         'isPublished', 'authorId', 'createdAt', 'updatedAt'
       ]) &&
       data.title is string && data.title.size() >= 1 && data.title.size() <= 160 &&
@@ -233,9 +278,21 @@ service cloud.firestore {
       data.timeLimitMinutes is int && data.timeLimitMinutes >= 0 && data.timeLimitMinutes <= 600 &&
       data.pdfUrl is string && data.pdfUrl.size() >= 0 && data.pdfUrl.size() <= 900000 &&
       data.pdfTitle is string && data.pdfTitle.size() >= 0 && data.pdfTitle.size() <= 160 &&
-      data.answerKey is string && data.answerKey.size() >= 1 && data.answerKey.size() <= 180 && data.answerKey.matches('^[ABCDE]+$') &&
       data.resultsReleased is bool &&
       data.isPublished is bool &&
+      data.authorId is string && isValidId(data.authorId) && data.authorId == request.auth.uid &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidSimuladoKey(data) {
+      return data.keys().hasAll([
+        'answerKey', 'authorId', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'answerKey', 'authorId', 'createdAt', 'updatedAt'
+      ]) &&
+      data.answerKey is string && data.answerKey.size() >= 1 && data.answerKey.size() <= 180 && data.answerKey.matches('^[ABCDE]+$') &&
       data.authorId is string && isValidId(data.authorId) && data.authorId == request.auth.uid &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
@@ -265,17 +322,19 @@ service cloud.firestore {
       data.updatedAt is timestamp;
     }
 
+    // isFree (opcional): marcado em PDFs de aulas grátis
     function isValidPdfChunk(data) {
       return data.keys().hasAll([
         'pdfId', 'chunkIndex', 'totalChunks', 'data', 'authorId', 'createdAt'
       ]) &&
       data.keys().hasOnly([
-        'pdfId', 'chunkIndex', 'totalChunks', 'data', 'authorId', 'createdAt'
+        'pdfId', 'chunkIndex', 'totalChunks', 'data', 'isFree', 'authorId', 'createdAt'
       ]) &&
       data.pdfId is string && isValidId(data.pdfId) &&
       data.chunkIndex is int && data.chunkIndex >= 0 && data.chunkIndex <= 200 &&
       data.totalChunks is int && data.totalChunks >= 1 && data.totalChunks <= 200 &&
       data.data is string && data.data.size() >= 1 && data.data.size() <= 750000 &&
+      (!('isFree' in data) || data.isFree is bool) &&
       data.authorId is string && isValidId(data.authorId) && data.authorId == request.auth.uid &&
       data.createdAt is timestamp;
     }
@@ -345,6 +404,104 @@ service cloud.firestore {
       data.updatedAt is timestamp;
     }
 
+    // --- MENTORIA ---
+    function isValidMentoria(data) {
+      return data.keys().hasAll([
+        'studentEmail', 'studentName', 'status', 'goal', 'examTarget',
+        'weeklyHoursTarget', 'startDate', 'endDate', 'mentorId',
+        'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'studentEmail', 'studentName', 'status', 'goal', 'examTarget',
+        'weeklyHoursTarget', 'startDate', 'endDate', 'mentorId',
+        'createdAt', 'updatedAt'
+      ]) &&
+      data.studentEmail is string && data.studentEmail.size() >= 3 && data.studentEmail.size() <= 100 && data.studentEmail == data.studentEmail.lower() &&
+      data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 120 &&
+      data.status is string && (data.status == 'active' || data.status == 'paused' || data.status == 'ended') &&
+      data.goal is string && data.goal.size() <= 600 &&
+      data.examTarget is string && data.examTarget.size() <= 120 &&
+      data.weeklyHoursTarget is int && data.weeklyHoursTarget >= 0 && data.weeklyHoursTarget <= 100 &&
+      isValidDateStr(data.startDate) &&
+      (data.endDate == '' || isValidDateStr(data.endDate)) &&
+      data.mentorId is string && isValidId(data.mentorId) && data.mentorId == request.auth.uid &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidMentoriaTask(data) {
+      return data.keys().hasAll([
+        'studentEmail', 'weekStart', 'title', 'description', 'kind',
+        'dueDate', 'done', 'doneAtMs', 'mentorId', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'studentEmail', 'weekStart', 'title', 'description', 'kind',
+        'dueDate', 'done', 'doneAtMs', 'mentorId', 'createdAt', 'updatedAt'
+      ]) &&
+      data.studentEmail is string && data.studentEmail.size() >= 3 && data.studentEmail.size() <= 100 && data.studentEmail == data.studentEmail.lower() &&
+      isValidDateStr(data.weekStart) &&
+      data.title is string && data.title.size() >= 1 && data.title.size() <= 160 &&
+      data.description is string && data.description.size() <= 1000 &&
+      data.kind is string && (data.kind == 'aula' || data.kind == 'questoes' || data.kind == 'simulado' || data.kind == 'revisao' || data.kind == 'outro') &&
+      (data.dueDate == '' || isValidDateStr(data.dueDate)) &&
+      data.done is bool &&
+      data.doneAtMs is int && data.doneAtMs >= 0 &&
+      data.mentorId is string && isValidId(data.mentorId) && data.mentorId == request.auth.uid &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidMentoriaCheckin(data) {
+      return data.keys().hasAll([
+        'studentEmail', 'weekStart', 'hoursStudied', 'questionsDone',
+        'focusRating', 'wins', 'difficulties', 'mentorFeedback',
+        'feedbackAtMs', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'studentEmail', 'weekStart', 'hoursStudied', 'questionsDone',
+        'focusRating', 'wins', 'difficulties', 'mentorFeedback',
+        'feedbackAtMs', 'createdAt', 'updatedAt'
+      ]) &&
+      data.studentEmail is string && data.studentEmail.size() >= 3 && data.studentEmail.size() <= 100 && data.studentEmail == data.studentEmail.lower() &&
+      isValidDateStr(data.weekStart) &&
+      (data.hoursStudied is int || data.hoursStudied is float) && data.hoursStudied >= 0 && data.hoursStudied <= 168 &&
+      data.questionsDone is int && data.questionsDone >= 0 && data.questionsDone <= 5000 &&
+      data.focusRating is int && data.focusRating >= 1 && data.focusRating <= 5 &&
+      data.wins is string && data.wins.size() <= 1500 &&
+      data.difficulties is string && data.difficulties.size() <= 1500 &&
+      data.mentorFeedback is string && data.mentorFeedback.size() <= 3000 &&
+      data.feedbackAtMs is int && data.feedbackAtMs >= 0 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidMentoriaEncontro(data) {
+      return data.keys().hasAll([
+        'scope', 'studentEmail', 'title', 'description', 'startsAtMs',
+        'durationMin', 'link', 'notes', 'mentorId', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'scope', 'studentEmail', 'title', 'description', 'startsAtMs',
+        'durationMin', 'link', 'notes', 'mentorId', 'createdAt', 'updatedAt'
+      ]) &&
+      data.scope is string && (data.scope == 'individual' || data.scope == 'grupo') &&
+      data.studentEmail is string && (data.scope == 'grupo' ? data.studentEmail == '' : (data.studentEmail == data.studentEmail.lower() && data.studentEmail.size() >= 3 && data.studentEmail.size() <= 100)) &&
+      data.title is string && data.title.size() >= 1 && data.title.size() <= 160 &&
+      data.description is string && data.description.size() <= 1000 &&
+      data.startsAtMs is int && data.startsAtMs >= 0 &&
+      data.durationMin is int && data.durationMin >= 5 && data.durationMin <= 600 &&
+      data.link is string && data.link.size() <= 500 && (data.link == '' || data.link.matches('^https://.*')) &&
+      data.notes is string && data.notes.size() <= 3000 &&
+      data.mentorId is string && isValidId(data.mentorId) && data.mentorId == request.auth.uid &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function likedByOnlySelfChanged() {
+      return incoming().likedBy.toSet().difference(existing().likedBy.toSet()).hasOnly([request.auth.uid]) ||
+             existing().likedBy.toSet().difference(incoming().likedBy.toSet()).hasOnly([request.auth.uid]);
+    }
+
     // 4. Collection Match Blocks
     match /admins/{adminUid} {
       allow get: if isVerifiedUser() && isValidId(adminUid) && request.auth.uid == adminUid;
@@ -352,8 +509,8 @@ service cloud.firestore {
     }
 
     match /lessons/{lessonId} {
-      allow get: if isVerifiedUser() && isValidId(lessonId) && (existing().isPublished == true || isAdmin());
-      allow list: if isVerifiedUser() && (existing().isPublished == true || existing().authorId == request.auth.uid);
+      allow get: if isVerifiedUser() && isValidId(lessonId) && (isAdmin() || (existing().isPublished == true && (existing().isFree == true || isLiberatedStudent())));
+      allow list: if isVerifiedUser() && (isAdmin() || (existing().isPublished == true && (existing().isFree == true || isLiberatedStudent())) || existing().authorId == request.auth.uid);
       allow create: if isVerifiedUser() && isValidId(lessonId) && isValidLesson(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
       allow update: if isVerifiedUser() && isValidId(lessonId) && isValidLesson(incoming()) && incoming().updatedAt == request.time && (
         isAdmin() || (
@@ -370,7 +527,7 @@ service cloud.firestore {
 
     match /lessonFolders/{folderId} {
       allow get: if isVerifiedUser() && isValidId(folderId) && (existing().isPublished == true || isAdmin());
-      allow list: if isVerifiedUser() && (existing().isPublished == true || existing().authorId == request.auth.uid);
+      allow list: if isVerifiedUser() && (existing().isPublished == true || existing().authorId == request.auth.uid || isAdmin());
       allow create: if isVerifiedUser() && isValidId(folderId) && isValidLessonFolder(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
       allow update: if isVerifiedUser() && isValidId(folderId) && isValidLessonFolder(incoming()) && incoming().updatedAt == request.time && (
         isAdmin() || (
@@ -386,7 +543,7 @@ service cloud.firestore {
 
     match /playlists/{playlistId} {
       allow get: if isVerifiedUser() && isValidId(playlistId) && (existing().isPublished == true || isAdmin());
-      allow list: if isVerifiedUser() && (existing().isPublished == true || existing().authorId == request.auth.uid);
+      allow list: if isVerifiedUser() && (existing().isPublished == true || existing().authorId == request.auth.uid || isAdmin());
       allow create: if isVerifiedUser() && isValidId(playlistId) && isValidPlaylist(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
       allow update: if isVerifiedUser() && isValidId(playlistId) && isValidPlaylist(incoming()) && incoming().updatedAt == request.time && (
         isAdmin() || (
@@ -402,7 +559,7 @@ service cloud.firestore {
 
     match /courses/{courseId} {
       allow get: if isVerifiedUser() && isValidId(courseId) && (existing().isPublished == true || isAdmin());
-      allow list: if isVerifiedUser() && (existing().isPublished == true || existing().authorId == request.auth.uid);
+      allow list: if isVerifiedUser() && (existing().isPublished == true || existing().authorId == request.auth.uid || isAdmin());
       allow create: if isVerifiedUser() && isValidId(courseId) && isValidCourse(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
       allow update: if isVerifiedUser() && isValidId(courseId) && isValidCourse(incoming()) && incoming().updatedAt == request.time && (
         isAdmin() || (
@@ -418,11 +575,13 @@ service cloud.firestore {
     }
 
     match /students/{studentId} {
-      allow get: if isVerifiedUser() && isValidId(studentId) && (resource == null || existing().email == request.auth.token.email || isAdmin());
-      allow list: if isVerifiedUser() && (isAdmin() || existing().email == request.auth.token.email || existing().addedBy == request.auth.uid);
+      allow get: if isVerifiedUser() && isValidId(studentId) && (resource == null || existing().email.lower() == emailLower() || isAdmin());
+      allow list: if isVerifiedUser() && (isAdmin() || existing().email.lower() == emailLower() || existing().addedBy == request.auth.uid);
       allow create: if isVerifiedUser() && isValidId(studentId) && isValidStudent(incoming()) && incoming().addedBy == request.auth.uid && incoming().createdAt == request.time && incoming().updatedAt == request.time && (
         isAdmin() || (
-          incoming().email == request.auth.token.email &&
+          request.auth.token.email.size() <= 100 &&
+          studentId == myStudentId() &&
+          incoming().email.lower() == emailLower() &&
           incoming().status == 'blocked' &&
           incoming().accessAll == false &&
           incoming().courseIds.size() == 0 &&
@@ -431,10 +590,10 @@ service cloud.firestore {
       );
       allow update: if isVerifiedUser() && isValidId(studentId) && isValidStudent(incoming()) && incoming().updatedAt == request.time && (
         isAdmin() || (
-          existing().email == request.auth.token.email &&
+          existing().email.lower() == emailLower() &&
+          incoming().email.lower() == emailLower() &&
           incoming().createdAt == existing().createdAt &&
           incoming().addedBy == existing().addedBy &&
-          incoming().email == existing().email &&
           incoming().status == existing().status &&
           incoming().accessAll == existing().accessAll &&
           incoming().courseIds == existing().courseIds &&
@@ -448,7 +607,7 @@ service cloud.firestore {
 
     match /turmas/{turmaId} {
       allow get: if isVerifiedUser() && isValidId(turmaId) && (existing().isPublished == true || isAdmin());
-      allow list: if isVerifiedUser() && (existing().isPublished == true || existing().authorId == request.auth.uid);
+      allow list: if isVerifiedUser() && (existing().isPublished == true || existing().authorId == request.auth.uid || isAdmin());
       allow create: if isVerifiedUser() && isValidId(turmaId) && isValidTurma(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
       allow update: if isVerifiedUser() && isValidId(turmaId) && isValidTurma(incoming()) && incoming().updatedAt == request.time && (
         isAdmin() || (
@@ -479,19 +638,14 @@ service cloud.firestore {
       allow get: if isVerifiedUser() && isValidId(configId);
       allow list: if false;
       allow create: if isVerifiedUser() && isValidId(configId) && isValidPlatformConfig(incoming()) && incoming().updatedAt == request.time && isAdmin();
-      allow update: if isVerifiedUser() && isValidId(configId) && isValidPlatformConfig(incoming()) && incoming().updatedAt == request.time && (
-        isAdmin() ||
-        incoming().diff(existing()).affectedKeys().hasOnly([
-          'brandName', 'heroTitle', 'heroSubtitle', 'heroCtaText',
-          'heroBgUrl', 'restrictToStudentList', 'updatedBy', 'updatedAt'
-        ])
-      );
+      allow update: if isVerifiedUser() && isValidId(configId) && isValidPlatformConfig(incoming()) && incoming().updatedAt == request.time && isAdmin();
       allow delete: if false;
     }
 
+    // Simulados: só admin ou aluno liberado (e publicado). Sem gabarito no documento.
     match /simulados/{simuladoId} {
-      allow get: if isVerifiedUser() && isValidId(simuladoId) && (existing().isPublished == true || isAdmin());
-      allow list: if isVerifiedUser() && (existing().isPublished == true || existing().authorId == request.auth.uid);
+      allow get: if isVerifiedUser() && isValidId(simuladoId) && (isAdmin() || (existing().isPublished == true && isLiberatedStudent()));
+      allow list: if isVerifiedUser() && (isAdmin() || (existing().isPublished == true && isLiberatedStudent()));
       allow create: if isVerifiedUser() && isValidId(simuladoId) && isValidSimulado(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
       allow update: if isVerifiedUser() && isValidId(simuladoId) && isValidSimulado(incoming()) && incoming().updatedAt == request.time && (
         isAdmin() || (
@@ -499,7 +653,7 @@ service cloud.firestore {
           incoming().authorId == existing().authorId &&
           incoming().diff(existing()).affectedKeys().hasOnly([
             'title', 'area', 'questionCount', 'timeLimitMinutes',
-            'pdfUrl', 'pdfTitle', 'answerKey', 'resultsReleased',
+            'pdfUrl', 'pdfTitle', 'resultsReleased',
             'isPublished', 'updatedAt'
           ])
         )
@@ -507,17 +661,44 @@ service cloud.firestore {
       allow delete: if isVerifiedUser() && isValidId(simuladoId) && isAdmin();
     }
 
+    // Gabarito separado em simuladoKeys.
+    match /simuladoKeys/{simuladoId} {
+      allow get: if isVerifiedUser() && isValidId(simuladoId) && (
+        isAdmin() || (
+          isLiberatedStudent() &&
+          exists(/databases/$(database)/documents/simulados/$(simuladoId)) &&
+          get(/databases/$(database)/documents/simulados/$(simuladoId)).data.resultsReleased == true &&
+          get(/databases/$(database)/documents/simulados/$(simuladoId)).data.isPublished == true
+        )
+      );
+      allow list: if isVerifiedUser() && isAdmin();
+      allow create: if isVerifiedUser() && isValidId(simuladoId) && isValidSimuladoKey(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
+      allow update: if isVerifiedUser() && isValidId(simuladoId) && isValidSimuladoKey(incoming()) && incoming().updatedAt == request.time && isAdmin();
+      allow delete: if isVerifiedUser() && isValidId(simuladoId) && isAdmin();
+    }
+
     match /simuladoSubmissions/{submissionId} {
-      allow get: if isVerifiedUser() && isValidId(submissionId);
-      allow list: if isVerifiedUser();
-      allow create: if isVerifiedUser() && isValidId(submissionId) && isValidSimuladoSubmission(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow get: if isVerifiedUser() && isValidId(submissionId) && (isAdmin() || existing().userId == request.auth.uid);
+      allow list: if isVerifiedUser() && (isAdmin() || existing().userId == request.auth.uid);
+      allow create: if isVerifiedUser() && isValidId(submissionId) && isValidSimuladoSubmission(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && (
+        isAdmin() || (
+          isLiberatedStudent() &&
+          incoming().userEmail.lower() == emailLower() &&
+          exists(/databases/$(database)/documents/simulados/$(incoming().simuladoId)) &&
+          get(/databases/$(database)/documents/simulados/$(incoming().simuladoId)).data.isPublished == true
+        )
+      );
       allow update: if isVerifiedUser() && isValidId(submissionId) && isValidSimuladoSubmission(incoming()) && incoming().updatedAt == request.time && (
         isAdmin() || (
+          existing().userId == request.auth.uid &&
+          existing().status == 'in_progress' &&
           incoming().userId == existing().userId &&
           incoming().simuladoId == existing().simuladoId &&
+          incoming().userEmail == existing().userEmail &&
+          incoming().createdAt == existing().createdAt &&
           incoming().diff(existing()).affectedKeys().hasOnly([
-            'userName', 'userEmail', 'status', 'answersString',
-            'startedAtMs', 'finishedAtMs', 'durationSeconds', 'createdAt', 'updatedAt'
+            'userName', 'status', 'answersString',
+            'startedAtMs', 'finishedAtMs', 'durationSeconds', 'updatedAt'
           ])
         )
       );
@@ -525,23 +706,27 @@ service cloud.firestore {
     }
 
     match /pdfChunks/{chunkId} {
-      allow get: if isVerifiedUser() && isValidId(chunkId);
-      allow list: if isVerifiedUser();
-      allow create: if isVerifiedUser() && isValidId(chunkId) && isValidPdfChunk(incoming()) && incoming().createdAt == request.time && isAdmin();
-      allow update: if isVerifiedUser() && isValidId(chunkId) && isValidPdfChunk(incoming()) && (
-        isAdmin() || (
-          incoming().createdAt == existing().createdAt &&
-          incoming().authorId == existing().authorId &&
-          incoming().diff(existing()).affectedKeys().hasOnly(['data'])
-        )
+      allow get: if isVerifiedUser() && isValidId(chunkId) && (
+        isAdmin() ||
+        (('isFree' in existing()) && existing().isFree == true) ||
+        isLiberatedStudent()
       );
+      allow list: if isVerifiedUser() && isAdmin();
+      allow create: if isVerifiedUser() && isValidId(chunkId) && isValidPdfChunk(incoming()) && incoming().createdAt == request.time && isAdmin();
+      allow update: if isVerifiedUser() && isValidId(chunkId) && isValidPdfChunk(incoming()) && isAdmin();
       allow delete: if isVerifiedUser() && isValidId(chunkId) && isAdmin();
     }
 
     match /doubts/{doubtId} {
-      allow get: if isVerifiedUser() && isValidId(doubtId);
-      allow list: if isVerifiedUser();
-      allow create: if isVerifiedUser() && isValidId(doubtId) && isValidDoubt(incoming()) && incoming().authorId == request.auth.uid && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow get: if isVerifiedUser() && isValidId(doubtId) && (isAdmin() || isLiberatedStudent());
+      allow list: if isVerifiedUser() && (isAdmin() || isLiberatedStudent());
+      allow create: if isVerifiedUser() && isValidId(doubtId) && isValidDoubt(incoming()) && incoming().authorId == request.auth.uid && incoming().createdAt == request.time && incoming().updatedAt == request.time && (
+        isAdmin() || (
+          isLiberatedStudent() &&
+          incoming().likedBy.size() == 0 &&
+          incoming().isResolved == false
+        )
+      );
       allow update: if isVerifiedUser() && isValidId(doubtId) && isValidDoubt(incoming()) && incoming().updatedAt == request.time && (
         isAdmin() || (
           existing().authorId == request.auth.uid &&
@@ -550,21 +735,24 @@ service cloud.firestore {
           incoming().createdAtMs == existing().createdAtMs &&
           incoming().diff(existing()).affectedKeys().hasOnly([
             'authorName', 'authorPhotoUrl', 'text', 'imageUrl', 'likedBy', 'isResolved', 'updatedAt'
-          ])
+          ]) &&
+          (!('likedBy' in incoming().diff(existing()).affectedKeys()) || likedByOnlySelfChanged())
         ) || (
+          isLiberatedStudent() &&
           incoming().authorId == existing().authorId &&
           incoming().createdAt == existing().createdAt &&
           incoming().createdAtMs == existing().createdAtMs &&
-          incoming().diff(existing()).affectedKeys().hasOnly(['likedBy', 'updatedAt'])
+          incoming().diff(existing()).affectedKeys().hasOnly(['likedBy', 'updatedAt']) &&
+          likedByOnlySelfChanged()
         )
       );
       allow delete: if isVerifiedUser() && isValidId(doubtId) && (existing().authorId == request.auth.uid || isAdmin());
     }
 
     match /doubtReplies/{replyId} {
-      allow get: if isVerifiedUser() && isValidId(replyId);
-      allow list: if isVerifiedUser();
-      allow create: if isVerifiedUser() && isValidId(replyId) && isValidDoubtReply(incoming()) && incoming().authorId == request.auth.uid && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow get: if isVerifiedUser() && isValidId(replyId) && (isAdmin() || isLiberatedStudent());
+      allow list: if isVerifiedUser() && (isAdmin() || isLiberatedStudent());
+      allow create: if isVerifiedUser() && isValidId(replyId) && isValidDoubtReply(incoming()) && incoming().authorId == request.auth.uid && incoming().createdAt == request.time && incoming().updatedAt == request.time && (isAdmin() || isLiberatedStudent());
       allow update: if isVerifiedUser() && isValidId(replyId) && isValidDoubtReply(incoming()) && incoming().updatedAt == request.time && (
         isAdmin() || (
           existing().authorId == request.auth.uid &&
@@ -586,6 +774,100 @@ service cloud.firestore {
       allow create: if isVerifiedUser() && isValidId(eventId) && isValidCalendarEvent(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
       allow update: if isVerifiedUser() && isValidId(eventId) && isValidCalendarEvent(incoming()) && incoming().updatedAt == request.time && isAdmin();
       allow delete: if isVerifiedUser() && isValidId(eventId) && isAdmin();
+    }
+
+    // =====================================================================
+    // MENTORIA (novo)
+    // =====================================================================
+    match /mentorias/{mentoriaId} {
+      allow get: if isVerifiedUser() && isValidId(mentoriaId) && (
+        isAdmin() ||
+        existing().studentEmail == emailLower()
+      );
+      allow list: if isVerifiedUser() && isAdmin();
+      allow create: if isVerifiedUser() && isValidId(mentoriaId) && isValidMentoria(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
+      allow update: if isVerifiedUser() && isValidId(mentoriaId) && isValidMentoria(incoming()) && incoming().updatedAt == request.time && isAdmin();
+      allow delete: if isVerifiedUser() && isValidId(mentoriaId) && isAdmin();
+    }
+
+    // Tarefas semanais.
+    match /mentoriaTasks/{taskId} {
+      allow get: if isVerifiedUser() && isValidId(taskId) && (
+        isAdmin() ||
+        (existing().studentEmail == emailLower() && hasActiveMentoria())
+      );
+      allow list: if isVerifiedUser() && (
+        isAdmin() ||
+        hasActiveMentoria()
+      );
+      allow create: if isVerifiedUser() && isValidId(taskId) && isValidMentoriaTask(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
+      allow update: if isVerifiedUser() && isValidId(taskId) && isValidMentoriaTask(incoming()) && incoming().updatedAt == request.time && (
+        isAdmin() || (
+          hasActiveMentoria() &&
+          existing().studentEmail == emailLower() &&
+          incoming().studentEmail == existing().studentEmail &&
+          incoming().weekStart == existing().weekStart &&
+          incoming().title == existing().title &&
+          incoming().description == existing().description &&
+          incoming().kind == existing().kind &&
+          incoming().dueDate == existing().dueDate &&
+          incoming().mentorId == existing().mentorId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['done', 'doneAtMs', 'updatedAt'])
+        )
+      );
+      allow delete: if isVerifiedUser() && isValidId(taskId) && isAdmin();
+    }
+
+    // Check-in semanal. ID = <ID do aluno>_<segunda-feira>
+    match /mentoriaCheckins/{checkinId} {
+      allow get: if isVerifiedUser() && isValidId(checkinId) && (
+        isAdmin() ||
+        (existing().studentEmail == emailLower() && hasActiveMentoria())
+      );
+      allow list: if isVerifiedUser() && (
+        isAdmin() ||
+        hasActiveMentoria()
+      );
+      allow create: if isVerifiedUser() && isValidId(checkinId) && isValidMentoriaCheckin(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && (
+        isAdmin() || (
+          hasActiveMentoria() &&
+          incoming().studentEmail == emailLower() &&
+          incoming().mentorFeedback == '' &&
+          incoming().feedbackAtMs == 0
+        )
+      );
+      allow update: if isVerifiedUser() && isValidId(checkinId) && isValidMentoriaCheckin(incoming()) && incoming().updatedAt == request.time && (
+        isAdmin() || (
+          hasActiveMentoria() &&
+          existing().studentEmail == emailLower() &&
+          incoming().studentEmail == existing().studentEmail &&
+          incoming().weekStart == existing().weekStart &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().mentorFeedback == existing().mentorFeedback &&
+          incoming().feedbackAtMs == existing().feedbackAtMs &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['hoursStudied', 'questionsDone', 'focusRating', 'wins', 'difficulties', 'updatedAt'])
+        )
+      );
+      allow delete: if isVerifiedUser() && isValidId(checkinId) && isAdmin();
+    }
+
+    // Encontros (individuais e em grupo)
+    match /mentoriaEncontros/{encontroId} {
+      allow get: if isVerifiedUser() && isValidId(encontroId) && (
+        isAdmin() ||
+        (
+          hasActiveMentoria() &&
+          (existing().scope == 'grupo' || existing().studentEmail == emailLower())
+        )
+      );
+      allow list: if isVerifiedUser() && (
+        isAdmin() ||
+        hasActiveMentoria()
+      );
+      allow create: if isVerifiedUser() && isValidId(encontroId) && isValidMentoriaEncontro(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
+      allow update: if isVerifiedUser() && isValidId(encontroId) && isValidMentoriaEncontro(incoming()) && incoming().updatedAt == request.time && isAdmin();
+      allow delete: if isVerifiedUser() && isValidId(encontroId) && isAdmin();
     }
   }
 }

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   onAuthStateChanged,
   signInWithPopup,
@@ -14,6 +14,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   onSnapshot,
   query,
   serverTimestamp,
@@ -45,6 +46,7 @@ import {
   Moon,
   Calendar as CalendarIcon,
   Sparkles,
+  Compass,
 } from 'lucide-react';
 import {
   auth,
@@ -82,12 +84,18 @@ import {
 import { CoverArtwork } from './components/CoverArtwork';
 import { StealthVideoPlayer } from './components/StealthVideoPlayer';
 import { VerticeLogo } from './components/VerticeLogo';
-import { evaluateSimuladoCohort } from './utils/triEngine';
 import {
-  resolvePdfUrlToViewable,
   triggerPdfDownload,
   setStudentPdfWatermarkInfo,
+  updatePdfChunksIsFree,
 } from './utils/pdfStorage';
+import { Mentoria, subscribeMyMentoria } from './utils/mentoriaService';
+
+const PdfCanvasViewer = React.lazy(() =>
+  import('./components/PdfCanvasViewer').then((m) => ({
+    default: m.PdfCanvasViewer,
+  }))
+);
 
 const AdminStudioModal = React.lazy(() =>
   import('./components/AdminStudioModal').then((m) => ({
@@ -119,11 +127,67 @@ const LessonPopupModal = React.lazy(() =>
     default: m.LessonPopupModal,
   }))
 );
+const MentoriaWindow = React.lazy(() =>
+  import('./components/MentoriaWindow').then((m) => ({
+    default: m.MentoriaWindow,
+  }))
+);
 
 const LazyComponentFallback = () => (
   <div className="w-full py-16 flex items-center justify-center">
-    <div className="w-8 h-8 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
+    <div className="w-8 h-8 rounded-full border-2 border-brand border-t-transparent animate-spin" />
   </div>
+);
+
+interface ClassroomLessonRowProps {
+  lesson: Lesson;
+  idx: number;
+  isCurrent: boolean;
+  isDone: boolean;
+  onSelect: (lessonId: string) => void;
+}
+
+const ClassroomLessonRow = React.memo<ClassroomLessonRowProps>(
+  ({ lesson, idx, isCurrent, isDone, onSelect }) => (
+    <button
+      type="button"
+      onClick={() => onSelect(lesson.id)}
+      className={`cv-auto-row w-full flex items-center justify-between gap-2.5 p-2.5 rounded-xl text-left transition-all cursor-pointer ${
+        isCurrent
+          ? 'bg-brand border border-brand-accent text-white shadow-glow-sm'
+          : 'bg-surface-2 hover:bg-surface-3 border border-line text-ink-2 hover:text-ink'
+      }`}
+    >
+      <div className="flex items-center gap-2.5 min-w-0">
+        <div
+          className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-mono tabular-nums shrink-0 ${
+            isCurrent
+              ? 'bg-white text-[#1d4ed8] font-bold'
+              : isDone
+                ? 'bg-emerald-500/20 text-emerald-500'
+                : 'bg-chip text-ink-2'
+          }`}
+        >
+          {isDone ? (
+            <CheckCircle2 className="w-3.5 h-3.5" />
+          ) : (
+            idx + 1
+          )}
+        </div>
+        <p
+          className={`text-xs truncate ${
+            isCurrent ? 'font-bold text-white' : 'font-medium text-ink'
+          }`}
+        >
+          {lesson.title}
+        </p>
+      </div>
+
+      {isCurrent && (
+        <Play className="w-3.5 h-3.5 text-white fill-current shrink-0" />
+      )}
+    </button>
+  )
 );
 
 type NavSection =
@@ -131,13 +195,97 @@ type NavSection =
   | 'simulados'
   | 'lessons'
   | 'duvidas'
+  | 'mentoria'
   | 'free'
   | 'admin';
+
+// Guarda onde o aluno estava (sobrevive a recarregar a aba, mas não a fechar o navegador)
+const NAV_STATE_KEY = 'vertice_nav_state_v1';
+const NAV_SECTIONS: NavSection[] = [
+  'home',
+  'simulados',
+  'lessons',
+  'duvidas',
+  'mentoria',
+  'free',
+  'admin',
+];
+
+interface SavedNavState {
+  activeNav: NavSection;
+  selectedCourseId: string | null;
+  selectedPlaylistId: string | null;
+  selectedLessonId: string | null;
+}
+
+function loadSavedNavState(): SavedNavState | null {
+  try {
+    const raw = sessionStorage.getItem(NAV_STATE_KEY);
+    if (!raw) return null;
+    const p = JSON.parse(raw) as Partial<SavedNavState>;
+    const str = (v: unknown) =>
+      typeof v === 'string' && v.length <= 128 ? v : null;
+    return {
+      activeNav: NAV_SECTIONS.includes(p.activeNav as NavSection)
+        ? (p.activeNav as NavSection)
+        : 'home',
+      selectedCourseId: str(p.selectedCourseId),
+      selectedPlaylistId: str(p.selectedPlaylistId),
+      selectedLessonId: str(p.selectedLessonId),
+    };
+  } catch {
+    return null;
+  }
+}
+
+class SafeErrorBoundary extends React.Component<
+  { children: React.ReactNode; fallback?: React.ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode; fallback?: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.warn('SafeErrorBoundary caught:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        this.props.fallback || (
+          <div className="p-8 rounded-2xl bg-surface border border-rose-500/30 text-center space-y-3 my-6 max-w-lg mx-auto shadow-card">
+            <p className="text-sm font-bold text-rose-500">
+              Ocorreu um problema ao carregar este vídeo.
+            </p>
+            <p className="text-xs text-ink-muted">
+              O vídeo não pôde ser iniciado ou ocorreu um erro de conexão.
+            </p>
+            <button
+              type="button"
+              onClick={() => this.setState({ hasError: false, error: null })}
+              className="px-5 py-2.5 rounded-full bg-brand hover:bg-brand-hover text-xs font-bold text-white transition-all cursor-pointer"
+            >
+              Tentar novamente
+            </button>
+          </div>
+        )
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const CONFIG_CACHE_KEY = 'vertice_platform_config_v1';
 const BOOT_CACHE_KEY = 'vertice_fast_boot_v2';
 const AUTH_HINT_KEY = 'vertice_auth_hint_v2';
 const THEME_STORAGE_KEY = 'vertice_theme_v1';
+const FAST_BOOT_IMAGE_MAX_CHARS = 60000;
 
 interface FastBootCache {
   courses?: Course[];
@@ -229,19 +377,21 @@ function saveFastBootCache(patch: Partial<FastBootCache>) {
       merged.courses = merged.courses.map((c) => ({
         ...c,
         coverUrl:
-          c.coverUrl && c.coverUrl.length > 20000
-            ? 'preset:stadium'
+          c.coverUrl && c.coverUrl.length > FAST_BOOT_IMAGE_MAX_CHARS
+            ? ''
             : c.coverUrl,
         bannerUrl:
-          c.bannerUrl && c.bannerUrl.length > 20000 ? '' : c.bannerUrl,
+          c.bannerUrl && c.bannerUrl.length > FAST_BOOT_IMAGE_MAX_CHARS
+            ? ''
+            : c.bannerUrl,
       }));
     }
     if (patch.playlists && merged.playlists) {
       merged.playlists = merged.playlists.map((p) => ({
         ...p,
         coverUrl:
-          p.coverUrl && p.coverUrl.length > 20000
-            ? 'preset:mastery'
+          p.coverUrl && p.coverUrl.length > FAST_BOOT_IMAGE_MAX_CHARS
+            ? ''
             : p.coverUrl,
       }));
     }
@@ -249,25 +399,75 @@ function saveFastBootCache(patch: Partial<FastBootCache>) {
       merged.lessons = merged.lessons.map((l) => ({
         ...l,
         thumbnailUrl:
-          l.thumbnailUrl && l.thumbnailUrl.length > 20000
+          l.thumbnailUrl && l.thumbnailUrl.length > FAST_BOOT_IMAGE_MAX_CHARS
             ? ''
             : l.thumbnailUrl,
         pdfs: (l.pdfs || []).map((pdf) => ({
           ...pdf,
-          url: pdf.url && pdf.url.length > 20000 ? '' : pdf.url,
+          url:
+            pdf.url && pdf.url.length > FAST_BOOT_IMAGE_MAX_CHARS
+              ? ''
+              : pdf.url,
         })),
       }));
     }
     if (patch.simulados && merged.simulados) {
       merged.simulados = merged.simulados.map((s) => ({
         ...s,
-        pdfUrl: s.pdfUrl && s.pdfUrl.length > 20000 ? '' : s.pdfUrl,
+        answerKey: '',
+        pdfUrl:
+          s.pdfUrl && s.pdfUrl.length > FAST_BOOT_IMAGE_MAX_CHARS
+            ? ''
+            : s.pdfUrl,
       }));
+    }
+    if (merged.myStudentRecord) {
+      merged.myStudentRecord = {
+        ...merged.myStudentRecord,
+        cpf: '',
+        phone: '',
+        birthDate: '',
+      };
+    }
+    if (merged.userProgress) {
+      merged.userProgress = {
+        ...merged.userProgress,
+        cpf: '',
+        phone: '',
+        birthDate: '',
+      };
     }
     memoryBootCache = merged;
     localStorage.setItem(BOOT_CACHE_KEY, JSON.stringify(merged));
   } catch {
     // ignore storage quota errors
+  }
+}
+
+function clearUserLocalCache(uid?: string | null) {
+  memoryBootCache = null;
+  try {
+    localStorage.removeItem(BOOT_CACHE_KEY);
+    localStorage.removeItem(AUTH_HINT_KEY);
+    if (uid) {
+      localStorage.removeItem(`vertice_watch_progress_${uid}`);
+      localStorage.removeItem(`vertice_playlist_watch_${uid}`);
+    }
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (
+        k &&
+        (k.startsWith('vertice_watch_progress_') ||
+          k.startsWith('vertice_playlist_watch_') ||
+          k.startsWith('vertice_simulado_'))
+      ) {
+        keysToRemove.push(k);
+      }
+    }
+    keysToRemove.forEach((k) => localStorage.removeItem(k));
+  } catch {
+    // ignore storage errors
   }
 }
 
@@ -309,16 +509,20 @@ export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(
     () => auth.currentUser || (initialAuthHint as unknown as FirebaseUser | null)
   );
-  // Tracks when the real Firebase Auth SDK has verified the token for Firestore queries
   const [verifiedAuthUid, setVerifiedAuthUid] = useState<string | null>(
     () => auth.currentUser?.uid || null
   );
   const [authReady, setAuthReady] = useState<boolean>(
     () => Boolean(auth.currentUser || initialAuthHint)
   );
+  // true só depois que o Firebase responder de verdade (onAuthStateChanged).
+  // Enquanto for false, NADA é apagado: a tela usa o cache de abertura rápida.
+  const [authResolved, setAuthResolved] = useState<boolean>(
+    () => Boolean(auth.currentUser)
+  );
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
-  // Firestore Collections State (hydrated synchronously from local boot cache for 0ms startup)
+  // Firestore Collections State
   const [lessons, setLessons] = useState<Lesson[]>(
     () => initialBootCache?.lessons || []
   );
@@ -355,8 +559,13 @@ export default function App() {
   const [platformConfig, setPlatformConfig] = useState<PlatformConfig>(
     () => initialConfigState.config
   );
+  const [heroImgLoaded, setHeroImgLoaded] = useState(false);
 
-  // Initial Firestore Snapshot Readiness Flags (true immediately if local boot cache exists)
+  useEffect(() => {
+    setHeroImgLoaded(false);
+  }, [platformConfig.heroBgUrl]);
+
+  // Initial Firestore Snapshot Readiness Flags
   const [configLoaded, setConfigLoaded] = useState<boolean>(
     () => initialConfigState.hasCache
   );
@@ -370,52 +579,76 @@ export default function App() {
     () => Array.isArray(initialBootCache?.lessons)
   );
 
-  // Controls deferred background subscription to heavy photo collections (Dúvidas)
   const [enableDoubtsSync, setEnableDoubtsSync] = useState(false);
 
   // Navigation & Window State
-  const [activeNav, setActiveNav] = useState<NavSection>('home');
-  const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null);
-  const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(
-    null
+  const initialNavState = useMemo(() => loadSavedNavState(), []);
+  const [activeNav, setActiveNav] = useState<NavSection>(
+    () => initialNavState?.activeNav || 'home'
   );
-  const [selectedLessonId, setSelectedLessonId] = useState<string | null>(null);
+  const [selectedCourseId, setSelectedCourseId] = useState<string | null>(
+    () => initialNavState?.selectedCourseId || null
+  );
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(
+    () => initialNavState?.selectedPlaylistId || null
+  );
+  const [selectedLessonId, setSelectedLessonId] = useState<string | null>(
+    () => initialNavState?.selectedLessonId || null
+  );
+
+  // Salva a posição de navegação a cada mudança (para voltar ao mesmo lugar se a aba recarregar)
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        NAV_STATE_KEY,
+        JSON.stringify({
+          activeNav,
+          selectedCourseId,
+          selectedPlaylistId,
+          selectedLessonId,
+        } satisfies SavedNavState)
+      );
+    } catch {
+      // ignore storage errors
+    }
+  }, [activeNav, selectedCourseId, selectedPlaylistId, selectedLessonId]);
   const [theaterMode, setTheaterMode] = useState(false);
   const [activePdf, setActivePdf] = useState<PdfAttachment | null>(null);
 
-  // Simulado Editor Window State (when opened directly from Simulados tab)
+  // Simulado Editor Window State
   const [isSimuladoEditorOpen, setIsSimuladoEditorOpen] = useState(false);
   const [editingSimuladoDirect, setEditingSimuladoDirect] =
     useState<Simulado | null>(null);
 
-
-  // Popup shown when a student clicks a locked course cover
   const [lockedCoursePopup, setLockedCoursePopup] = useState<Course | null>(
     null
   );
 
-  // Minimalist Lesson Popup Modal State (shared with Gerenciar)
+  // Minimalist Lesson Popup Modal State
   const [isLessonPopupOpen, setIsLessonPopupOpen] = useState(false);
   const [editingLesson, setEditingLesson] = useState<Lesson | null>(null);
   const [lessonModalDefaultFree, setLessonModalDefaultFree] = useState(false);
   const [lessonModalDefaultFolderId, setLessonModalDefaultFolderId] =
     useState<string>('');
   const [isLessonsDropdownOpen, setIsLessonsDropdownOpen] = useState(false);
-  const [resolvedActivePdfUrl, setResolvedActivePdfUrl] = useState<string>('');
-  const [isLoadingActivePdf, setIsLoadingActivePdf] = useState<boolean>(false);
 
   // Top-right Profile Dropdown & Profile Modal State
   const [isProfileDropdownOpen, setIsProfileDropdownOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [profileNameInput, setProfileNameInput] = useState('');
+  const [profileNameError, setProfileNameError] = useState<string | null>(null);
+  const profileNameRef = useRef<HTMLInputElement>(null);
   const [profilePhoneInput, setProfilePhoneInput] = useState('');
   const [profileBirthDateInput, setProfileBirthDateInput] = useState('');
   const [isSavingProfile, setIsSavingProfile] = useState(false);
 
-  // Calendar Modal Window State
+  // Calendar Modal Window State + Visible Year filter (Fase 1.8)
   const [isCalendarModalOpen, setIsCalendarModalOpen] = useState(false);
+  const [calendarVisibleYear, setCalendarVisibleYear] = useState<number>(() =>
+    new Date().getFullYear()
+  );
 
-  // User Theme State ('dark' | 'light') with persistent storage
+  // User Theme State ('dark' | 'light') with persistent storage & smooth 250ms transition
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
     try {
       return localStorage.getItem(THEME_STORAGE_KEY) === 'light'
@@ -426,12 +659,33 @@ export default function App() {
     }
   });
 
+  const themeSwitchTimerRef = useRef<number | null>(null);
+
+  const applyThemeChange = useCallback(
+    (nextTheme: 'dark' | 'light' | ((prev: 'dark' | 'light') => 'dark' | 'light')) => {
+      const root = document.documentElement;
+      root.classList.add('theme-switching');
+      if (themeSwitchTimerRef.current !== null) {
+        window.clearTimeout(themeSwitchTimerRef.current);
+      }
+      themeSwitchTimerRef.current = window.setTimeout(() => {
+        root.classList.remove('theme-switching');
+      }, 250);
+      setTheme(nextTheme);
+    },
+    []
+  );
+
   useEffect(() => {
     const root = document.documentElement;
     if (theme === 'light') {
       root.classList.add('theme-light');
     } else {
       root.classList.remove('theme-light');
+    }
+    const metaTheme = document.querySelector('meta[name="theme-color"]');
+    if (metaTheme) {
+      metaTheme.setAttribute('content', theme === 'light' ? '#f0f5fc' : '#070b14');
     }
     try {
       localStorage.setItem(THEME_STORAGE_KEY, theme);
@@ -440,7 +694,27 @@ export default function App() {
     }
   }, [theme]);
 
-  // Deletion Confirmation Popup State (for User/Student, Turma, Lesson, Playlist, Course, Simulado, Doubt, CalendarEvent)
+  // Fase 1.9: Preload secondary tabs in requestIdleCallback after first paint
+  useEffect(() => {
+    if (!user) return;
+    const preloadChunks = () => {
+      import('./components/SimuladosWindow').catch(() => {});
+      import('./components/DuvidasWindow').catch(() => {});
+      import('./components/CalendarModal').catch(() => {});
+    };
+    const w = window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    if (typeof w.requestIdleCallback === 'function') {
+      const id = w.requestIdleCallback(preloadChunks, { timeout: 2500 });
+      return () => w.cancelIdleCallback?.(id);
+    }
+    const timer = window.setTimeout(preloadChunks, 1500);
+    return () => window.clearTimeout(timer);
+  }, [user]);
+
+  // Deletion Confirmation Popup State
   const [pendingDelete, setPendingDelete] = useState<{
     type:
       | 'student'
@@ -487,10 +761,112 @@ export default function App() {
     >
   >({});
 
+  // Fase 1.4: In-memory ref for video playback progress so App only re-renders every 15s, on pause, on video end, or on visibilitychange
+  const pendingLessonProgressRef = useRef<
+    Record<
+      string,
+      {
+        currentTimeSec: number;
+        durationSec: number;
+        courseId: string | null;
+        playlistId: string | null;
+        updatedAt: number;
+      }
+    >
+  >({});
+  const lastFlushedWatchAtRef = useRef<Record<string, number>>({});
+
+  const flushPendingWatchProgress = useCallback(
+    (specificLessonId?: string) => {
+      if (!user?.uid) return;
+      const pending = pendingLessonProgressRef.current;
+      const keys = specificLessonId
+        ? pending[specificLessonId]
+          ? [specificLessonId]
+          : []
+        : Object.keys(pending);
+      if (keys.length === 0) return;
+
+      const uid = user.uid;
+      const now = Date.now();
+
+      setLessonWatchMap((prev) => {
+        const next = { ...prev };
+        for (const lid of keys) {
+          const entry = pending[lid];
+          if (!entry) continue;
+          next[lid] = {
+            currentTimeSec: entry.currentTimeSec,
+            durationSec: entry.durationSec || prev[lid]?.durationSec || 0,
+            courseId: entry.courseId ?? prev[lid]?.courseId ?? null,
+            playlistId: entry.playlistId ?? prev[lid]?.playlistId ?? null,
+            updatedAt: entry.updatedAt || now,
+          };
+          lastFlushedWatchAtRef.current[lid] = now;
+        }
+        try {
+          localStorage.setItem(
+            `vertice_watch_progress_${uid}`,
+            JSON.stringify(next)
+          );
+        } catch {
+          // ignore
+        }
+        return next;
+      });
+
+      setPlaylistWatchMap((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const lid of keys) {
+          const entry = pending[lid];
+          if (!entry || !entry.playlistId) continue;
+          next[entry.playlistId] = {
+            lessonId: lid,
+            courseId: entry.courseId ?? prev[entry.playlistId]?.courseId ?? null,
+            updatedAt: entry.updatedAt || now,
+          };
+          changed = true;
+        }
+        if (!changed) return prev;
+        try {
+          localStorage.setItem(
+            `vertice_playlist_watch_${uid}`,
+            JSON.stringify(next)
+          );
+        } catch {
+          // ignore
+        }
+        return next;
+      });
+    },
+    [user?.uid]
+  );
+
+  // Flush pending progress when tab becomes hidden or before page unload
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        flushPendingWatchProgress();
+      }
+    };
+    const handlePageHide = () => {
+      flushPendingWatchProgress();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handlePageHide);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handlePageHide);
+    };
+  }, [flushPendingWatchProgress]);
+
   useEffect(() => {
     if (!user?.uid) {
       setLessonWatchMap({});
       setPlaylistWatchMap({});
+      pendingLessonProgressRef.current = {};
+      lastFlushedWatchAtRef.current = {};
       return;
     }
     try {
@@ -515,7 +891,6 @@ export default function App() {
     }
   }, [user?.uid]);
 
-  // Keep PDF edge watermark synced with the current student's Full Name, CPF, and Email
   const currentStudentWatermarkName =
     myStudentRecord?.name ||
     userProgress?.displayName ||
@@ -539,42 +914,6 @@ export default function App() {
     });
   }, [
     user,
-    currentStudentWatermarkName,
-    currentStudentWatermarkCpf,
-    currentStudentWatermarkEmail,
-  ]);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!activePdf) {
-      setResolvedActivePdfUrl('');
-      setIsLoadingActivePdf(false);
-      return;
-    }
-    setIsLoadingActivePdf(true);
-    resolvePdfUrlToViewable(activePdf.url, {
-      name: currentStudentWatermarkName,
-      cpf: currentStudentWatermarkCpf,
-      email: currentStudentWatermarkEmail,
-    })
-      .then((url) => {
-        if (!cancelled) {
-          setResolvedActivePdfUrl(url);
-          setIsLoadingActivePdf(false);
-        }
-      })
-      .catch((err) => {
-        console.error('Erro ao carregar PDF:', err);
-        if (!cancelled) {
-          setResolvedActivePdfUrl('');
-          setIsLoadingActivePdf(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    activePdf,
     currentStudentWatermarkName,
     currentStudentWatermarkCpf,
     currentStudentWatermarkEmail,
@@ -609,28 +948,181 @@ export default function App() {
       document.removeEventListener('mousedown', handleOutsideProfileClick);
   }, [isProfileDropdownOpen]);
 
-  const userUid = user?.uid || null;
   const userEmail = user?.email || null;
   const userEmailVerified = Boolean(user?.emailVerified);
 
+  const [isAdminDoc, setIsAdminDoc] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!verifiedAuthUid) {
+      setIsAdminDoc(false);
+      return;
+    }
+    const unsubAdmin = onSnapshot(
+      doc(db, 'admins', verifiedAuthUid),
+      (snap) => {
+        setIsAdminDoc(snap.exists());
+      },
+      () => {
+        setIsAdminDoc(false);
+      }
+    );
+    return () => unsubAdmin();
+  }, [verifiedAuthUid]);
+
   const isAdmin = useMemo(() => {
-    return Boolean(
+    const isOwner = Boolean(
       userEmail &&
         userEmailVerified &&
         userEmail.toLowerCase() === ADMIN_BOOTSTRAP_EMAIL.toLowerCase()
     );
-  }, [userEmail, userEmailVerified]);
+    return isOwner || isAdminDoc;
+  }, [userEmail, userEmailVerified, isAdminDoc]);
+
+  const [myMentoria, setMyMentoria] = useState<Mentoria | null>(null);
+
+  useEffect(() => {
+    if (!userEmail) {
+      setMyMentoria(null);
+      return;
+    }
+    const unsub = subscribeMyMentoria(userEmail, (m) => {
+      setMyMentoria(m);
+    });
+    return () => unsub();
+  }, [userEmail]);
+
+  const myStudentTurma = useMemo(() => {
+    if (!myStudentRecord?.turmaId) return null;
+    return turmas.find((t) => t.id === myStudentRecord.turmaId) || null;
+  }, [myStudentRecord?.turmaId, turmas]);
+
+  const canAccessCourse = (courseId: string): boolean => {
+    if (courseId === FREE_COURSE_ID) return true;
+    if (isAdmin) return true;
+    if (!myStudentRecord || !myStudentTurma) return false;
+    if (myStudentTurma.accessAll) return true;
+    return Boolean(myStudentTurma.courseIds?.includes(courseId));
+  };
+
+  const isLiberatedUser = useMemo(() => {
+    if (isAdmin) return true;
+    if (!myStudentRecord || myStudentRecord.status !== 'active' || !myStudentTurma)
+      return false;
+    const regularCourses = courses.filter((c) => c.id !== FREE_COURSE_ID);
+    if (myStudentTurma.accessAll) return true;
+    if (regularCourses.length > 0) {
+      return regularCourses.some((c) =>
+        Boolean(myStudentTurma.courseIds?.includes(c.id))
+      );
+    }
+    return (myStudentTurma.courseIds?.length || 0) > 0;
+  }, [isAdmin, myStudentRecord, myStudentTurma, courses]);
+
+  const isBlockedUser = !isLiberatedUser;
+
+  const hasActiveMentoria =
+    isAdmin || (!isBlockedUser && myMentoria?.status === 'active');
+
+  const canAccessPlaylist = (pl: Playlist): boolean => {
+    if (pl.id === FREE_PLAYLIST_ID) return true;
+    if (isAdmin) return true;
+    if (!myStudentRecord || !myStudentTurma) return false;
+    const parentCourses = courses.filter(
+      (c) => c.id !== FREE_COURSE_ID && c.playlistIds?.includes(pl.id)
+    );
+    if (parentCourses.length > 0) {
+      return parentCourses.some((c) => canAccessCourse(c.id));
+    }
+    return Boolean(myStudentTurma.accessAll);
+  };
+
+  // Simulado Keys isolation & resolution (A4.1)
+  const [simuladoKeysMap, setSimuladoKeysMap] = useState<
+    Record<string, string>
+  >({});
+
+  useEffect(() => {
+    if (!verifiedAuthUid || !isAdmin) return;
+    if (activeNav !== 'simulados' && activeNav !== 'admin') return;
+    const unsubKeys = onSnapshot(
+      collection(db, 'simuladoKeys'),
+      (snap) => {
+        const map: Record<string, string> = {};
+        snap.forEach((d) => {
+          const data = d.data();
+          if (data && typeof data.answerKey === 'string') {
+            map[d.id] = data.answerKey;
+          }
+        });
+        setSimuladoKeysMap(map);
+      },
+      () => {}
+    );
+    return () => unsubKeys();
+  }, [verifiedAuthUid, isAdmin, activeNav]);
+
+  useEffect(() => {
+    if (isAdmin || isBlockedUser || !verifiedAuthUid) return;
+    if (activeNav !== 'simulados') return;
+    const releasedSims = simulados.filter((s) => s.resultsReleased);
+    if (releasedSims.length === 0) return;
+
+    let active = true;
+    Promise.all(
+      releasedSims.map(async (s) => {
+        try {
+          const snap = await getDoc(doc(db, 'simuladoKeys', s.id));
+          if (snap.exists()) {
+            return {
+              id: s.id,
+              key: (snap.data()?.answerKey as string) || '',
+            };
+          }
+        } catch {
+          // ignore permission denied
+        }
+        return { id: s.id, key: '' };
+      })
+    ).then((results) => {
+      if (!active) return;
+      setSimuladoKeysMap((prev) => {
+        const next = { ...prev };
+        results.forEach((r) => {
+          if (r.key) next[r.id] = r.key;
+        });
+        return next;
+      });
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [isAdmin, isBlockedUser, verifiedAuthUid, simulados, activeNav]);
+
+  const resolvedSimulados = useMemo(() => {
+    return simulados.map((s) => ({
+      ...s,
+      answerKey: simuladoKeysMap[s.id] || s.answerKey || '',
+    }));
+  }, [simulados, simuladoKeysMap]);
 
   // 1. Auth Listener (confirms Firebase Auth session & updates fast-boot hint)
   useEffect(() => {
+    // Rede de segurança: se o Firebase não responder em 8 s, libera a tela
+    // (antes eram 350 ms, curto demais em celular: mostrava o login por engano).
     const fallbackTimer = window.setTimeout(() => {
       setAuthReady(true);
-    }, 350);
+    }, 8000);
     const unsub = onAuthStateChanged(auth, (currentUser) => {
       window.clearTimeout(fallbackTimer);
       setUser(currentUser);
       setVerifiedAuthUid(currentUser?.uid || null);
       saveAuthHint(currentUser);
+      if (!currentUser) {
+        clearUserLocalCache(null);
+      }
+      setAuthResolved(true);
       setAuthReady(true);
     });
     return () => {
@@ -639,7 +1131,8 @@ export default function App() {
     };
   }, []);
 
-  // Ensure initial loading spinner never hangs on new devices/tablets if network or snapshots are slow
+  // Ensure initial loading spinner never hangs on new devices/tablets if network or snapshots are slow.
+  // 5 s (antes 250 ms: abria a tela inicial vazia e depois "piscava" ao chegar os dados).
   useEffect(() => {
     if (!user) return;
     const timer = window.setTimeout(() => {
@@ -647,11 +1140,10 @@ export default function App() {
       setCoursesLoaded(true);
       setPlaylistsLoaded(true);
       setLessonsLoaded(true);
-    }, 250);
+    }, 5000);
     return () => window.clearTimeout(timer);
   }, [user]);
 
-  // Activate Dúvidas subscription when user opens Dúvidas tab
   useEffect(() => {
     if (!verifiedAuthUid) {
       setEnableDoubtsSync(false);
@@ -662,10 +1154,13 @@ export default function App() {
     }
   }, [verifiedAuthUid, activeNav]);
 
-  // 2. Real-time Firestore Subscriptions (Core Home & Simulados collections)
+  // 2. Real-time Firestore Subscriptions (Core Home collections)
   useEffect(() => {
     if (!verifiedAuthUid) {
-      if (authReady) {
+      // CORREÇÃO DO "PISCAR": só limpa os dados quando o Firebase CONFIRMAR que não há
+      // usuário. Antes limpava logo ao abrir (auth ainda restaurando), apagando a tela
+      // que veio do cache e jogando o aluno de volta para o início.
+      if (authResolved) {
         setLessons([]);
         setLessonFolders([]);
         setPlaylists([]);
@@ -763,27 +1258,6 @@ export default function App() {
       }
     );
 
-    const lessonsQuery = query(
-      collection(db, 'lessons'),
-      where('isPublished', '==', true)
-    );
-    const unsubLessons = onSnapshot(
-      lessonsQuery,
-      (snap) => {
-        const list = snap.docs.map((d) => ({
-          ...(d.data() as Omit<Lesson, 'id'>),
-          id: d.id,
-        }));
-        setLessons(list);
-        setLessonsLoaded(true);
-        saveFastBootCache({ lessons: list });
-      },
-      (err) => {
-        setLessonsLoaded(true);
-        handleFirestoreError(err, OperationType.LIST, 'lessons');
-      }
-    );
-
     const lessonFoldersQuery = query(
       collection(db, 'lessonFolders'),
       where('isPublished', '==', true)
@@ -878,42 +1352,6 @@ export default function App() {
       );
     }
 
-    const simuladosQuery = query(
-      collection(db, 'simulados'),
-      where('isPublished', '==', true)
-    );
-    const unsubSimulados = onSnapshot(
-      simuladosQuery,
-      (snap) => {
-        const list = snap.docs.map((d) => ({
-          ...(d.data() as Omit<Simulado, 'id'>),
-          id: d.id,
-        }));
-        setSimulados(list);
-        saveFastBootCache({ simulados: list });
-      },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'simulados')
-    );
-
-    const submissionsQuery = isAdmin
-      ? collection(db, 'simuladoSubmissions')
-      : query(
-          collection(db, 'simuladoSubmissions'),
-          where('userId', '==', verifiedAuthUid)
-        );
-    const unsubSubmissions = onSnapshot(
-      submissionsQuery,
-      (snap) => {
-        const list = snap.docs.map((d) => ({
-          ...(d.data() as Omit<SimuladoSubmission, 'id'>),
-          id: d.id,
-        }));
-        setSimuladoSubmissions(list);
-      },
-      (err) =>
-        handleFirestoreError(err, OperationType.LIST, 'simuladoSubmissions')
-    );
-
     const turmasQuery = query(
       collection(db, 'turmas'),
       where('isPublished', '==', true)
@@ -931,7 +1369,31 @@ export default function App() {
       (err) => handleFirestoreError(err, OperationType.LIST, 'turmas')
     );
 
-    const calendarQuery = collection(db, 'calendarEvents');
+    return () => {
+      unsubConfig();
+      unsubCourses();
+      unsubPlaylists();
+      unsubLessonFolders();
+      unsubProgress();
+      unsubMyStudent();
+      unsubTurmas();
+    };
+  }, [authResolved, verifiedAuthUid, userEmail, isAdmin]);
+
+  // Fase 1.8: Lazy Calendar Events subscription (only when Calendar is open, filtered by visible year)
+  useEffect(() => {
+    if (!user || !verifiedAuthUid || !isCalendarModalOpen) {
+      return;
+    }
+
+    const startOfYear = `${calendarVisibleYear}-01-01`;
+    const endOfYear = `${calendarVisibleYear}-12-31`;
+    const calendarQuery = query(
+      collection(db, 'calendarEvents'),
+      where('startDate', '>=', startOfYear),
+      where('startDate', '<=', endOfYear)
+    );
+
     const unsubCalendar = onSnapshot(
       calendarQuery,
       (snap) => {
@@ -945,41 +1407,157 @@ export default function App() {
       (err) => handleFirestoreError(err, OperationType.LIST, 'calendarEvents')
     );
 
-    let unsubStudentsList = () => {};
-    if (isAdmin) {
-      const stuQuery = collection(db, 'students');
-      unsubStudentsList = onSnapshot(
-        stuQuery,
-        (snap) => {
-          const list = snap.docs.map((d) => ({
-            ...(d.data() as Omit<Student, 'id'>),
-            id: d.id,
-          }));
-          setStudents(list);
-        },
-        (err) => handleFirestoreError(err, OperationType.LIST, 'students')
-      );
+    return () => unsubCalendar();
+  }, [user, verifiedAuthUid, isCalendarModalOpen, calendarVisibleYear]);
+
+  // Fase 1.8: Lazy Admin Students subscription (only when Gerenciar or Calendar is open)
+  useEffect(() => {
+    if (
+      !user ||
+      !verifiedAuthUid ||
+      !isAdmin ||
+      (activeNav !== 'admin' && !isCalendarModalOpen)
+    ) {
+      return;
     }
 
+    const unsubStudentsList = onSnapshot(
+      collection(db, 'students'),
+      (snap) => {
+        const list = snap.docs.map((d) => ({
+          ...(d.data() as Omit<Student, 'id'>),
+          id: d.id,
+        }));
+        setStudents(list);
+      },
+      (err) => handleFirestoreError(err, OperationType.LIST, 'students')
+    );
+
+    return () => unsubStudentsList();
+  }, [user, verifiedAuthUid, isAdmin, activeNav, isCalendarModalOpen]);
+
+  // Dedicated Lessons Subscription based on student classification
+  useEffect(() => {
+    if (!user || !verifiedAuthUid) {
+      if (authResolved) {
+        setLessons([]);
+        setLessonsLoaded(false);
+      }
+      return;
+    }
+
+    const lessonsQuery =
+      isAdmin || !isBlockedUser
+        ? query(collection(db, 'lessons'), where('isPublished', '==', true))
+        : query(
+            collection(db, 'lessons'),
+            where('isPublished', '==', true),
+            where('isFree', '==', true)
+          );
+
+    const unsubLessons = onSnapshot(
+      lessonsQuery,
+      (snap) => {
+        const list = snap.docs.map((d) => ({
+          ...(d.data() as Omit<Lesson, 'id'>),
+          id: d.id,
+        }));
+        setLessons(list);
+        setLessonsLoaded(true);
+        saveFastBootCache({ lessons: list });
+      },
+      (err) => {
+        setLessonsLoaded(true);
+        setLessons([]);
+        handleFirestoreError(err, OperationType.LIST, 'lessons');
+      }
+    );
+
+    return () => unsubLessons();
+  }, [authResolved, user, verifiedAuthUid, isAdmin, isBlockedUser]);
+
+  // Fase 1.8: Lazy Simulados & Submissions subscription (only when Simulados, Home, or Admin is active)
+  useEffect(() => {
+    if (!user || !verifiedAuthUid) {
+      if (authResolved) {
+        setSimulados([]);
+        setSimuladoSubmissions([]);
+      }
+      return;
+    }
+
+    if (!isAdmin && isBlockedUser) {
+      setSimulados([]);
+      setSimuladoSubmissions([]);
+      return;
+    }
+
+    const shouldSubscribeSimulados =
+      activeNav === 'simulados' ||
+      activeNav === 'home' ||
+      activeNav === 'admin';
+    if (!shouldSubscribeSimulados) {
+      return;
+    }
+
+    const simuladosQuery = query(
+      collection(db, 'simulados'),
+      where('isPublished', '==', true)
+    );
+    const unsubSimulados = onSnapshot(
+      simuladosQuery,
+      (snap) => {
+        const list = snap.docs.map((d) => ({
+          ...(d.data() as Omit<Simulado, 'id'>),
+          id: d.id,
+        }));
+        setSimulados(list);
+        saveFastBootCache({ simulados: list });
+      },
+      (err) => {
+        setSimulados([]);
+        handleFirestoreError(err, OperationType.LIST, 'simulados');
+      }
+    );
+
+    const submissionsQuery = isAdmin
+      ? collection(db, 'simuladoSubmissions')
+      : query(
+          collection(db, 'simuladoSubmissions'),
+          where('userId', '==', verifiedAuthUid)
+        );
+    const unsubSubmissions = onSnapshot(
+      submissionsQuery,
+      (snap) => {
+        const list = snap.docs.map((d) => ({
+          ...(d.data() as Omit<SimuladoSubmission, 'id'>),
+          id: d.id,
+        }));
+        setSimuladoSubmissions(list);
+      },
+      (err) => {
+        setSimuladoSubmissions([]);
+        handleFirestoreError(err, OperationType.LIST, 'simuladoSubmissions');
+      }
+    );
+
     return () => {
-      unsubConfig();
-      unsubCourses();
-      unsubPlaylists();
-      unsubLessons();
-      unsubLessonFolders();
-      unsubProgress();
-      unsubMyStudent();
       unsubSimulados();
       unsubSubmissions();
-      unsubTurmas();
-      unsubCalendar();
-      unsubStudentsList();
     };
-  }, [authReady, verifiedAuthUid, userEmail, isAdmin]);
+  }, [authResolved, user, verifiedAuthUid, isAdmin, isBlockedUser, activeNav]);
 
-  // 3. Deferred / On-Demand Subscription for Dúvidas & Replies (heavy photo collections)
+  // 3. Deferred / On-Demand Subscription for Dúvidas & Replies
   useEffect(() => {
-    if (!verifiedAuthUid || !enableDoubtsSync) return;
+    if (!verifiedAuthUid || !enableDoubtsSync) {
+      return;
+    }
+
+    if (!isAdmin && isBlockedUser) {
+      setDoubts([]);
+      setDoubtReplies([]);
+      return;
+    }
 
     const unsubDoubts = onSnapshot(
       collection(db, 'doubts'),
@@ -990,7 +1568,10 @@ export default function App() {
         }));
         setDoubts(list);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'doubts')
+      (err) => {
+        setDoubts([]);
+        handleFirestoreError(err, OperationType.LIST, 'doubts');
+      }
     );
 
     const unsubDoubtReplies = onSnapshot(
@@ -1002,16 +1583,18 @@ export default function App() {
         }));
         setDoubtReplies(list);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'doubtReplies')
+      (err) => {
+        setDoubtReplies([]);
+        handleFirestoreError(err, OperationType.LIST, 'doubtReplies');
+      }
     );
 
     return () => {
       unsubDoubts();
       unsubDoubtReplies();
     };
-  }, [verifiedAuthUid, enableDoubtsSync]);
+  }, [verifiedAuthUid, enableDoubtsSync, isAdmin, isBlockedUser]);
 
-  // Filter out any orphaned submissions whose simulado was deleted
   const activeSimuladoSubmissions = useMemo(() => {
     const validSimuladoIds = new Set(simulados.map((s) => s.id));
     return simuladoSubmissions.filter((sub) =>
@@ -1032,18 +1615,26 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
+    flushPendingWatchProgress();
+    const currentUid = user?.uid || auth.currentUser?.uid || null;
     setSelectedCourseId(null);
     setSelectedPlaylistId(null);
     setSelectedLessonId(null);
     setActivePdf(null);
     setActiveNav('home');
     saveAuthHint(null);
+    try {
+      sessionStorage.removeItem(NAV_STATE_KEY);
+    } catch {
+      // ignore storage errors
+    }
+    clearUserLocalCache(currentUid);
     setUser(null);
     setVerifiedAuthUid(null);
     await signOut(auth);
   };
 
-  // --- ADMIN CRUD OPERATIONS (CLEAN & DETERMINISTIC, NO PHANTOM RE-SEEDS) ---
+  // --- ADMIN CRUD OPERATIONS ---
   const handleSaveLesson = async (
     lessonData: Omit<Lesson, 'createdAt' | 'updatedAt'>,
     isNew: boolean
@@ -1069,7 +1660,14 @@ export default function App() {
         updatedAt: serverTimestamp(),
       });
 
-      // Keep Free Playlist in sync if lesson's isFree status was toggled
+      if (payload.pdfs && payload.pdfs.length > 0) {
+        for (const pdf of payload.pdfs) {
+          if (pdf.url && pdf.url.startsWith('chunked:')) {
+            await updatePdfChunksIsFree(pdf.url, Boolean(payload.isFree));
+          }
+        }
+      }
+
       const existingFreePl = playlists.find((p) => p.id === FREE_PLAYLIST_ID);
       if (payload.isFree) {
         const nextFreeIds = existingFreePl
@@ -1117,7 +1715,6 @@ export default function App() {
         setSelectedLessonId(null);
       }
 
-      // Cascade-remove deleted lessonId from all playlists so no ghost references remain
       for (const pl of playlists) {
         if (pl.lessonIds.includes(lessonId)) {
           const cleanedIds = pl.lessonIds.filter((id) => id !== lessonId);
@@ -1168,7 +1765,6 @@ export default function App() {
     if (!user) return;
     try {
       await deleteDoc(doc(db, 'lessonFolders', folderId));
-      // Clear folderId on lessons that belonged to this folder so they remain accessible
       const folderLessons = lessons.filter((l) => l.folderId === folderId);
       for (const lesson of folderLessons) {
         await setDoc(doc(db, 'lessons', lesson.id), {
@@ -1234,7 +1830,6 @@ export default function App() {
     const ref = doc(db, 'playlists', id);
     const existingPl = playlists.find((p) => p.id === id);
 
-    // Filter out any deleted lesson IDs
     const validLessonIds = new Set(lessons.map((l) => l.id));
     const cleanLessonIds = payload.lessonIds.filter((lid) =>
       validLessonIds.has(lid)
@@ -1267,7 +1862,6 @@ export default function App() {
         setSelectedPlaylistId(null);
       }
 
-      // Cascade-remove deleted playlistId from all courses
       for (const c of courses) {
         if (c.playlistIds.includes(playlistId)) {
           const cleanedPlIds = c.playlistIds.filter((id) => id !== playlistId);
@@ -1401,6 +1995,14 @@ export default function App() {
             createdAt: lesson.createdAt || serverTimestamp(),
             updatedAt: serverTimestamp(),
           });
+
+          if (lesson.pdfs && lesson.pdfs.length > 0) {
+            for (const pdf of lesson.pdfs) {
+              if (pdf.url && pdf.url.startsWith('chunked:')) {
+                await updatePdfChunksIsFree(pdf.url, shouldBeFree);
+              }
+            }
+          }
         }
       }
     } catch (err) {
@@ -1412,13 +2014,12 @@ export default function App() {
     }
   };
 
-  // --- SIMULADO ADMIN & STUDENT SUBMISSION HANDLERS ---
   const handleSaveSimulado = async (
     simuladoData: Omit<Simulado, 'createdAt' | 'updatedAt'>,
     isNew: boolean
   ) => {
     if (!user) return;
-    const { id, ...payload } = simuladoData;
+    const { id, answerKey, ...payload } = simuladoData;
     const ref = doc(db, 'simulados', id);
     const existingSim = simulados.find((s) => s.id === id);
 
@@ -1430,13 +2031,33 @@ export default function App() {
         timeLimitMinutes: payload.timeLimitMinutes || 0,
         pdfUrl: payload.pdfUrl || '',
         pdfTitle: payload.pdfTitle || '',
-        answerKey: payload.answerKey,
         resultsReleased: Boolean(payload.resultsReleased),
         isPublished: true,
         authorId: existingSim?.authorId || payload.authorId || user.uid,
         createdAt: existingSim?.createdAt || serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+
+      if (answerKey) {
+        const cleanKey = answerKey.replace(/[^ABCDE]/g, 'A');
+        const keyRef = doc(db, 'simuladoKeys', id);
+        const existingKeySnap = await getDoc(keyRef).catch(() => null);
+        const existingKeyData = existingKeySnap?.exists()
+          ? existingKeySnap.data()
+          : null;
+
+        await setDoc(keyRef, {
+          answerKey: cleanKey,
+          authorId: existingKeyData?.authorId || user.uid,
+          createdAt: existingKeyData?.createdAt || serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+
+        setSimuladoKeysMap((prev) => ({
+          ...prev,
+          [id]: cleanKey,
+        }));
+      }
     } catch (err) {
       handleFirestoreError(
         err,
@@ -1449,8 +2070,14 @@ export default function App() {
   const handleDeleteSimulado = async (simuladoId: string) => {
     try {
       await deleteDoc(doc(db, 'simulados', simuladoId));
+      await deleteDoc(doc(db, 'simuladoKeys', simuladoId)).catch(() => {});
 
-      // Also delete all submissions associated with this simulado so no remnant data remains
+      setSimuladoKeysMap((prev) => {
+        const next = { ...prev };
+        delete next[simuladoId];
+        return next;
+      });
+
       const subsToDelete = simuladoSubmissions.filter(
         (sub) => sub.simuladoId === simuladoId
       );
@@ -1458,7 +2085,6 @@ export default function App() {
         await deleteDoc(doc(db, 'simuladoSubmissions', sub.id));
       }
 
-      // Clear local draft cache if any
       if (user) {
         try {
           localStorage.removeItem(
@@ -1488,7 +2114,6 @@ export default function App() {
         timeLimitMinutes: simulado.timeLimitMinutes || 0,
         pdfUrl: simulado.pdfUrl || '',
         pdfTitle: simulado.pdfTitle || '',
-        answerKey: simulado.answerKey,
         resultsReleased: !simulado.resultsReleased,
         isPublished: true,
         authorId: simulado.authorId || user.uid,
@@ -1639,7 +2264,6 @@ export default function App() {
         updatedAt: serverTimestamp(),
       });
 
-      // Sync courses for students belonging to this Turma
       const turmaStudents = students.filter((s) => s.turmaId === id);
       for (const stu of turmaStudents) {
         await setDoc(doc(db, 'students', stu.id), {
@@ -1670,7 +2294,6 @@ export default function App() {
     if (!user) return;
     try {
       await deleteDoc(doc(db, 'turmas', turmaId));
-      // Unlink students from the deleted turma without deleting the students or their simulado data
       const turmaStudents = students.filter((s) => s.turmaId === turmaId);
       for (const stu of turmaStudents) {
         await setDoc(doc(db, 'students', stu.id), {
@@ -2006,7 +2629,7 @@ export default function App() {
     }
   };
 
-  // --- USER PROGRESS & PROFILE (FAVORITES, COMPLETION, NAME, PHONE & BIRTHDATE) ---
+  // --- USER PROGRESS & PROFILE ---
   const saveProgressState = async (
     nextFavorites: string[],
     nextCompleted: string[],
@@ -2056,6 +2679,7 @@ export default function App() {
       myStudentRecord?.birthDate || userProgress?.birthDate || ''
     );
     setProfileNameInput(currentName);
+    setProfileNameError(null);
     setProfilePhoneInput(currentPhone);
     setProfileBirthDateInput(currentBirthDate);
     setIsProfileDropdownOpen(false);
@@ -2075,7 +2699,13 @@ export default function App() {
 
   const handleSaveUserProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || !profileNameInput.trim()) return;
+    if (!user) return;
+    if (!profileNameInput.trim()) {
+      setProfileNameError('Informe o seu nome completo.');
+      profileNameRef.current?.focus();
+      return;
+    }
+    setProfileNameError(null);
     setIsSavingProfile(true);
     const cleanName = sanitizeString(profileNameInput, 120, 'Aluno');
     const cleanPhone = sanitizeString(profilePhoneInput, 40, '');
@@ -2114,7 +2744,6 @@ export default function App() {
         });
       }
 
-      // Sync updated name across any existing simulado submissions by this user
       const mySubs = simuladoSubmissions.filter((s) => s.userId === user.uid);
       for (const sub of mySubs) {
         if (sub.userName !== cleanName) {
@@ -2137,19 +2766,6 @@ export default function App() {
     }
   };
 
-  const toggleFavoriteLesson = (lessonId: string) => {
-    if (!userProgress) return;
-    const exists = userProgress.favoriteLessonIds.includes(lessonId);
-    const nextFavs = exists
-      ? userProgress.favoriteLessonIds.filter((id) => id !== lessonId)
-      : [...userProgress.favoriteLessonIds, lessonId];
-    saveProgressState(
-      nextFavs,
-      userProgress.completedLessonIds,
-      userProgress.lastWatchedLessonId
-    );
-  };
-
   const toggleCompletedLesson = (lessonId: string) => {
     if (!userProgress) return;
     const exists = userProgress.completedLessonIds.includes(lessonId);
@@ -2157,48 +2773,6 @@ export default function App() {
       ? userProgress.completedLessonIds.filter((id) => id !== lessonId)
       : [...userProgress.completedLessonIds, lessonId];
     saveProgressState(userProgress.favoriteLessonIds, nextComp, lessonId);
-  };
-
-  // --- ACCESS CONTROL: LIBERATED STUDENT vs BLOCKED STUDENT (COURSES LIBERATED STRICTLY VIA TURMAS) ---
-  const myStudentTurma = useMemo(() => {
-    if (!myStudentRecord?.turmaId) return null;
-    return turmas.find((t) => t.id === myStudentRecord.turmaId) || null;
-  }, [myStudentRecord?.turmaId, turmas]);
-
-  const canAccessCourse = (courseId: string): boolean => {
-    if (courseId === FREE_COURSE_ID) return true;
-    if (isAdmin) return true;
-    if (!myStudentRecord || !myStudentTurma) return false;
-    if (myStudentTurma.accessAll) return true;
-    return Boolean(myStudentTurma.courseIds?.includes(courseId));
-  };
-
-  const isLiberatedUser = useMemo(() => {
-    if (isAdmin) return true;
-    if (!myStudentRecord || !myStudentTurma) return false;
-    const regularCourses = courses.filter((c) => c.id !== FREE_COURSE_ID);
-    if (myStudentTurma.accessAll) return true;
-    if (regularCourses.length > 0) {
-      return regularCourses.some((c) =>
-        Boolean(myStudentTurma.courseIds?.includes(c.id))
-      );
-    }
-    return (myStudentTurma.courseIds?.length || 0) > 0;
-  }, [isAdmin, myStudentRecord, myStudentTurma, courses]);
-
-  const isBlockedUser = !isLiberatedUser;
-
-  const canAccessPlaylist = (pl: Playlist): boolean => {
-    if (pl.id === FREE_PLAYLIST_ID) return true;
-    if (isAdmin) return true;
-    if (!myStudentRecord || !myStudentTurma) return false;
-    const parentCourses = courses.filter(
-      (c) => c.id !== FREE_COURSE_ID && c.playlistIds?.includes(pl.id)
-    );
-    if (parentCourses.length > 0) {
-      return parentCourses.some((c) => canAccessCourse(c.id));
-    }
-    return Boolean(myStudentTurma.accessAll);
   };
 
   const freePlaylist = useMemo(
@@ -2340,11 +2914,13 @@ export default function App() {
 
     setLessonWatchMap((prev) => {
       const existing = prev[lessonId];
+      const pending = pendingLessonProgressRef.current[lessonId];
       const next = {
         ...prev,
         [lessonId]: {
-          currentTimeSec: existing?.currentTimeSec || 0,
-          durationSec: existing?.durationSec || 0,
+          currentTimeSec:
+            pending?.currentTimeSec ?? existing?.currentTimeSec ?? 0,
+          durationSec: pending?.durationSec ?? existing?.durationSec ?? 0,
           courseId: courseId || existing?.courseId || null,
           playlistId: playlistId || existing?.playlistId || null,
           updatedAt: now,
@@ -2415,6 +2991,7 @@ export default function App() {
   };
 
   const openFreeModule = () => {
+    flushPendingWatchProgress();
     setActivePdf(null);
     setActiveNav('home');
     setSelectedCourseId(FREE_COURSE_ID);
@@ -2440,6 +3017,7 @@ export default function App() {
       openFreeModule();
       return;
     }
+    flushPendingWatchProgress();
     setActivePdf(null);
     setSelectedCourseId(course.id);
     setSelectedPlaylistId(null);
@@ -2453,6 +3031,7 @@ export default function App() {
       return;
     }
     if (!canAccessPlaylist(pl)) return;
+    flushPendingWatchProgress();
     setActivePdf(null);
     const parentCourse = courseId
       ? courses.find((c) => c.id === courseId) || null
@@ -2472,6 +3051,7 @@ export default function App() {
 
   const openDirectLesson = (lesson: Lesson) => {
     if (isBlockedUser && !lesson.isFree) return;
+    flushPendingWatchProgress();
     setActivePdf(null);
     const parentPl =
       playlists.find(
@@ -2482,15 +3062,24 @@ export default function App() {
           (c) => c.id !== FREE_COURSE_ID && c.playlistIds?.includes(parentPl.id)
         ) || null
       : null;
-    const resolvedCourseId = parentCourse ? parentCourse.id : null;
-    const resolvedPlId = parentPl ? parentPl.id : null;
+    const resolvedCourseId = parentCourse
+      ? parentCourse.id
+      : lesson.isFree
+        ? FREE_COURSE_ID
+        : null;
+    const resolvedPlId = parentPl
+      ? parentPl.id
+      : lesson.isFree
+        ? FREE_PLAYLIST_ID
+        : null;
     setSelectedCourseId(resolvedCourseId);
     setSelectedPlaylistId(resolvedPlId);
     setSelectedLessonId(lesson.id);
     recordWatchActivity(lesson.id, resolvedPlId, resolvedCourseId);
   };
 
-  const exitClassroom = () => {
+  const exitClassroom = useCallback(() => {
+    flushPendingWatchProgress();
     setSelectedCourseId(null);
     setSelectedPlaylistId(null);
     setSelectedLessonId(null);
@@ -2498,12 +3087,16 @@ export default function App() {
     setIsLessonsDropdownOpen(false);
     setIsSimuladoEditorOpen(false);
     setEditingSimuladoDirect(null);
-  };
+  }, [flushPendingWatchProgress]);
 
-  const scrollCarousel = (dir: -1 | 1) => {
-    if (!carouselRef.current) return;
-    carouselRef.current.scrollBy({ left: dir * 320, behavior: 'smooth' });
-  };
+  const handleSelectLessonFromDropdown = useCallback(
+    (lessonId: string) => {
+      flushPendingWatchProgress();
+      setSelectedLessonId(lessonId);
+      setIsLessonsDropdownOpen(false);
+    },
+    [flushPendingWatchProgress]
+  );
 
   const openCreateLessonPopup = (
     defaultIsFree = false,
@@ -2608,7 +3201,6 @@ export default function App() {
     [lessons, selectedLessonId]
   );
 
-  // When a playlist is selected, show strictly the lessons of that playlist
   const orderedClassroomLessons = useMemo(() => {
     if (activePlaylist) {
       return (activePlaylist.lessonIds || [])
@@ -2680,10 +3272,12 @@ export default function App() {
 
   const autoCompletedLessonsRef = useRef<Set<string>>(new Set());
 
+  // Fase 1.4: Store current playback position in a ref and only update React state + localStorage every 15 seconds, on pause, or on video end
   const handleLessonTimeUpdate = (
     lessonId: string,
     currentTimeSec: number,
-    durationSec: number
+    durationSec: number,
+    forceFlush = false
   ) => {
     if (!user?.uid) return;
 
@@ -2743,64 +3337,21 @@ export default function App() {
     }
 
     const now = Date.now();
-    setLessonWatchMap((prev) => {
-      const existing = prev[lessonId];
-      if (
-        existing &&
-        Math.abs(existing.currentTimeSec - currentTimeSec) < 3 &&
-        existing.playlistId === resolvedPlId
-      ) {
-        return prev;
-      }
-      const next = {
-        ...prev,
-        [lessonId]: {
-          currentTimeSec,
-          durationSec: durationSec || existing?.durationSec || 0,
-          courseId: resolvedCourseId,
-          playlistId: resolvedPlId,
-          updatedAt: now,
-        },
-      };
-      try {
-        localStorage.setItem(
-          `vertice_watch_progress_${user.uid}`,
-          JSON.stringify(next)
-        );
-      } catch {
-        // Ignore storage quota errors
-      }
-      return next;
-    });
+    pendingLessonProgressRef.current[lessonId] = {
+      currentTimeSec,
+      durationSec:
+        durationSec ||
+        pendingLessonProgressRef.current[lessonId]?.durationSec ||
+        lessonWatchMap[lessonId]?.durationSec ||
+        0,
+      courseId: resolvedCourseId,
+      playlistId: resolvedPlId,
+      updatedAt: now,
+    };
 
-    if (resolvedPlId) {
-      setPlaylistWatchMap((prev) => {
-        const existingPl = prev[resolvedPlId];
-        if (
-          existingPl &&
-          existingPl.lessonId === lessonId &&
-          now - (existingPl.updatedAt || 0) < 10000
-        ) {
-          return prev;
-        }
-        const next = {
-          ...prev,
-          [resolvedPlId]: {
-            lessonId,
-            courseId: resolvedCourseId,
-            updatedAt: now,
-          },
-        };
-        try {
-          localStorage.setItem(
-            `vertice_playlist_watch_${user.uid}`,
-            JSON.stringify(next)
-          );
-        } catch {
-          // Ignore storage quota errors
-        }
-        return next;
-      });
+    const lastFlushed = lastFlushedWatchAtRef.current[lessonId] || 0;
+    if (forceFlush || now - lastFlushed >= 15000) {
+      flushPendingWatchProgress(lessonId);
     }
   };
 
@@ -2890,7 +3441,6 @@ export default function App() {
         )) ||
       (lesson.isFree ? freeCourse : null);
 
-    // Ensure student has access to continue watching this lesson
     const hasAccess =
       Boolean(lesson.isFree) ||
       (parentCourse ? canAccessCourse(parentCourse.id) : !isBlockedUser);
@@ -2945,8 +3495,8 @@ export default function App() {
 
   if (!authReady || (user && !initialDataReady)) {
     return (
-      <div className="min-h-screen bg-[#070b14] flex items-center justify-center">
-        <div className="w-10 h-10 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
+      <div className="min-h-dvh bg-canvas flex items-center justify-center">
+        <div className="w-10 h-10 rounded-full border-2 border-brand border-t-transparent animate-spin" />
       </div>
     );
   }
@@ -2954,19 +3504,19 @@ export default function App() {
   // --- GOOGLE-ONLY LOGIN SCREEN ---
   if (!user) {
     return (
-      <div className="min-h-screen bg-[#070b14] text-white relative overflow-hidden flex flex-col items-center justify-center px-4">
-        <div className="absolute -top-32 left-1/2 -translate-x-1/2 w-[540px] h-[540px] rounded-full bg-[#2563eb]/25 blur-[130px] pointer-events-none" />
-        <div className="absolute bottom-0 inset-x-0 h-64 bg-gradient-to-t from-[#050a14] to-transparent pointer-events-none" />
+      <div className="min-h-dvh bg-canvas text-ink relative overflow-hidden flex flex-col items-center justify-center px-4">
+        <div className="pointer-events-none absolute -top-32 left-1/2 -translate-x-1/2 w-[540px] max-w-[140vw] h-[540px] bg-[radial-gradient(closest-side,rgba(37,99,235,0.25),transparent)]" />
+        <div className="absolute bottom-0 inset-x-0 h-64 bg-gradient-to-t from-canvas to-transparent pointer-events-none" />
 
-        <div className="relative z-10 w-full max-w-sm bg-[#0d1527]/90 backdrop-blur-xl border border-white/10 rounded-3xl p-8 text-center shadow-2xl">
+        <div className="relative z-10 w-full max-w-sm bg-surface border border-line rounded-3xl p-8 text-center shadow-pop">
           <div className="inline-flex items-center justify-center mb-5">
             <VerticeLogo className="w-14 h-14" />
           </div>
 
-          <h1 className="text-2xl font-extrabold tracking-tight text-white uppercase">
+          <h1 className="text-2xl font-extrabold tracking-tight text-ink uppercase">
             {platformConfig.brandName || 'CURSO VÉRTICE'}
           </h1>
-          <p className="mt-1.5 text-xs text-slate-300 text-balance">
+          <p className="mt-1.5 text-xs text-ink-2 text-balance">
             {platformConfig.heroTitle || 'Sua plataforma para Enem e vestibulares'}
           </p>
 
@@ -2974,7 +3524,7 @@ export default function App() {
             type="button"
             onClick={handleGoogleSignIn}
             disabled={isLoggingIn}
-            className="mt-8 w-full py-3.5 px-5 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] active:scale-[0.99] text-white text-sm font-bold flex items-center justify-center gap-3 shadow-[0_8px_28px_rgba(37,99,235,0.45)] transition-all cursor-pointer disabled:opacity-50"
+            className="mt-8 w-full py-3.5 px-5 rounded-full bg-brand hover:bg-brand-hover active:scale-[0.99] text-white text-sm font-bold flex items-center justify-center gap-3 shadow-glow-md transition-all cursor-pointer disabled:opacity-50"
           >
             <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
               <path
@@ -3011,7 +3561,7 @@ export default function App() {
       : platformConfig.heroSubtitle;
 
   return (
-    <div className="min-h-screen bg-[#070b14] text-slate-100 relative flex flex-col pb-20 md:pb-12 overflow-x-hidden">
+    <div className="min-h-dvh bg-canvas text-ink relative flex flex-col pb-[calc(5rem+env(safe-area-inset-bottom))] md:pb-12 overflow-x-hidden">
       {/* FULL-BLEED MEMBERCLASS STAGE BACKGROUND (NO HARD LINES, SMOOTH FADE DOWNWARD) */}
       {showFullBleedBackdrop && (
         <div className="absolute inset-x-0 top-0 h-[560px] md:h-[660px] z-0 pointer-events-none overflow-hidden select-none">
@@ -3019,9 +3569,16 @@ export default function App() {
             <img
               src={platformConfig.heroBgUrl}
               alt={displayHeroTitle}
+              fetchPriority="high"
+              decoding="async"
               referrerPolicy="no-referrer"
-              className={`w-full h-full object-cover object-center scale-[1.02] ${
-                theme === 'light' ? 'opacity-30' : 'opacity-70'
+              onLoad={() => setHeroImgLoaded(true)}
+              className={`w-full h-full object-cover object-center scale-[1.02] transition-opacity duration-200 ${
+                heroImgLoaded
+                  ? theme === 'light'
+                    ? 'opacity-30'
+                    : 'opacity-70'
+                  : 'opacity-0'
               }`}
             />
           ) : (
@@ -3038,8 +3595,10 @@ export default function App() {
                 }
               />
               <div
-                className={`absolute top-12 left-1/2 -translate-x-1/2 w-[540px] h-[240px] rounded-full blur-[110px] ${
-                  theme === 'light' ? 'bg-[#3b82f6]/20' : 'bg-[#3b82f6]/25'
+                className={`pointer-events-none absolute top-12 left-1/2 -translate-x-1/2 w-[540px] max-w-[140vw] h-[240px] ${
+                  theme === 'light'
+                    ? 'bg-[radial-gradient(closest-side,rgba(59,130,246,0.20),transparent)]'
+                    : 'bg-[radial-gradient(closest-side,rgba(59,130,246,0.25),transparent)]'
                 }`}
               />
             </div>
@@ -3071,28 +3630,26 @@ export default function App() {
 
       {/* TOP BAR CONTRACT */}
       <header
-        className={`sticky top-0 z-30 px-5 md:px-12 py-4 flex items-center justify-between gap-6 transition-colors ${
+        className={`sticky top-0 z-30 px-5 md:px-12 pb-4 pt-[max(1rem,env(safe-area-inset-top))] flex items-center justify-between gap-6 transition-colors ${
           showFullBleedBackdrop
             ? theme === 'light'
               ? 'bg-gradient-to-b from-[#f0f5fc]/90 via-[#f0f5fc]/50 to-transparent'
               : 'bg-gradient-to-b from-[#070b14]/85 via-[#070b14]/40 to-transparent'
-            : 'bg-[#070b14]/95 backdrop-blur-md border-b border-white/5'
+            : 'bg-canvas/95 backdrop-blur-md border-b border-line-soft'
         }`}
       >
-        {/* Zone 1: White Transparent Logo + White Course Name */}
         <button
           type="button"
           onClick={() => {
             exitClassroom();
             setActiveNav('home');
           }}
-          className="inline-flex items-center gap-2.5 text-base md:text-lg font-extrabold tracking-wider text-white uppercase whitespace-nowrap shrink-0 cursor-pointer"
+          className="inline-flex items-center gap-2.5 text-base md:text-lg font-extrabold tracking-wider text-ink uppercase whitespace-nowrap shrink-0 cursor-pointer"
         >
           <VerticeLogo className="w-7 h-7 md:w-8 md:h-8" />
           <span>{displayBrandName}</span>
         </button>
 
-        {/* Zone 2: Navigation Links */}
         <nav className="hidden md:flex items-center gap-7 text-sm font-medium">
           <button
             type="button"
@@ -3102,8 +3659,8 @@ export default function App() {
             }}
             className={`transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               activeNav === 'home' && !activeLesson && !activePdf && !isCalendarModalOpen
-                ? 'text-white font-bold'
-                : 'text-slate-300/80 hover:text-white'
+                ? 'text-ink font-bold'
+                : 'text-ink-muted hover:text-ink'
             }`}
           >
             Início
@@ -3118,8 +3675,8 @@ export default function App() {
               }}
               className={`transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                 isCalendarModalOpen
-                  ? 'text-white font-bold'
-                  : 'text-slate-300/80 hover:text-white'
+                  ? 'text-ink font-bold'
+                  : 'text-ink-muted hover:text-ink'
               }`}
             >
               Calendário
@@ -3134,8 +3691,8 @@ export default function App() {
             }}
             className={`transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               activeNav === 'simulados' && !activeLesson && !activePdf
-                ? 'text-white font-bold'
-                : 'text-slate-300/80 hover:text-white'
+                ? 'text-ink font-bold'
+                : 'text-ink-muted hover:text-ink'
             }`}
           >
             Simulados
@@ -3149,12 +3706,29 @@ export default function App() {
             }}
             className={`transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               activeNav === 'duvidas' && !activeLesson && !activePdf
-                ? 'text-white font-bold'
-                : 'text-slate-300/80 hover:text-white'
+                ? 'text-ink font-bold'
+                : 'text-ink-muted hover:text-ink'
             }`}
           >
             Dúvidas
           </button>
+
+          {hasActiveMentoria && (
+            <button
+              type="button"
+              onClick={() => {
+                exitClassroom();
+                setActiveNav('mentoria');
+              }}
+              className={`transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                activeNav === 'mentoria' && !activeLesson && !activePdf
+                  ? 'text-ink font-bold'
+                  : 'text-ink-muted hover:text-ink'
+              }`}
+            >
+              Mentoria
+            </button>
+          )}
 
           {isBlockedUser && (
             <button
@@ -3162,8 +3736,8 @@ export default function App() {
               onClick={openFreeModule}
               className={`transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                 selectedCourseId === FREE_COURSE_ID || activeNav === 'free'
-                  ? 'text-white font-bold'
-                  : 'text-slate-300/80 hover:text-white'
+                  ? 'text-ink font-bold'
+                  : 'text-ink-muted hover:text-ink'
               }`}
             >
               Aulas Grátis
@@ -3171,7 +3745,6 @@ export default function App() {
           )}
         </nav>
 
-        {/* Zone 3: Admin Controls + Profile */}
         <div className="flex items-center gap-2.5 shrink-0">
           {isAdmin && (
             <button
@@ -3182,8 +3755,8 @@ export default function App() {
               }}
               className={`hidden md:flex px-4 py-2 rounded-full text-xs font-bold items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                 activeNav === 'admin' && !activeLesson && !activePdf
-                  ? 'bg-white text-[#070b14]'
-                  : 'bg-[#2563eb] hover:bg-[#1d4ed8] text-white shadow-[0_0_20px_rgba(37,99,235,0.35)]'
+                  ? 'bg-contrast text-contrast-ink'
+                  : 'bg-brand hover:bg-brand-hover text-white shadow-glow-sm'
               }`}
             >
               <Sliders className="w-3.5 h-3.5" />
@@ -3196,17 +3769,18 @@ export default function App() {
               type="button"
               onClick={() => setIsProfileDropdownOpen((prev) => !prev)}
               title="Menu do perfil"
-              className="flex items-center gap-1.5 p-1 pr-2.5 rounded-full bg-white/10 hover:bg-white/15 border border-white/10 text-slate-200 hover:text-white text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="flex items-center gap-1.5 p-1 pr-2.5 rounded-full bg-chip hover:bg-chip-hover border border-line text-ink-2 hover:text-ink text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               {user.photoURL ? (
                 <img
                   src={user.photoURL}
                   alt={user.displayName || 'Conta'}
+                  decoding="async"
                   referrerPolicy="no-referrer"
                   className="w-7 h-7 rounded-full object-cover"
                 />
               ) : (
-                <div className="w-7 h-7 rounded-full bg-[#2563eb] text-white flex items-center justify-center text-xs font-bold">
+                <div className="w-7 h-7 rounded-full bg-brand text-white flex items-center justify-center text-xs font-bold">
                   {(
                     myStudentRecord?.name ||
                     userProgress?.displayName ||
@@ -3217,20 +3791,20 @@ export default function App() {
                 </div>
               )}
               <ChevronDown
-                className={`w-3.5 h-3.5 text-slate-300 transition-transform duration-200 ${
-                  isProfileDropdownOpen ? 'rotate-180 text-white' : ''
+                className={`w-3.5 h-3.5 text-ink-muted transition-transform duration-200 ${
+                  isProfileDropdownOpen ? 'rotate-180 text-ink' : ''
                 }`}
               />
             </button>
 
             {isProfileDropdownOpen && (
-              <div className="absolute right-0 top-full mt-2.5 w-52 rounded-2xl bg-[#0d1527]/95 backdrop-blur-xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.85)] p-1.5 z-50">
+              <div className="absolute right-0 top-full mt-2.5 w-52 rounded-2xl bg-surface border border-line shadow-pop p-1.5 z-50">
                 <button
                   type="button"
                   onClick={openProfileModal}
-                  className="group w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold text-slate-200 hover:text-white hover:bg-white/[0.06] transition-all text-left cursor-pointer"
+                  className="group w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold text-ink-2 hover:text-ink hover:bg-chip-hover transition-all text-left cursor-pointer"
                 >
-                  <span className="w-7 h-7 rounded-lg bg-[#2563eb]/15 border border-[#3b82f6]/30 text-[#60a5fa] group-hover:bg-[#2563eb] group-hover:border-[#3b82f6] group-hover:text-white flex items-center justify-center shrink-0 transition-all">
+                  <span className="w-7 h-7 rounded-lg bg-brand/15 border border-brand-soft/30 text-brand-accent group-hover:bg-brand group-hover:border-brand-soft group-hover:text-white flex items-center justify-center shrink-0 transition-all">
                     <UserIcon className="w-3.5 h-3.5" strokeWidth={2} />
                   </span>
                   <span>Perfil</span>
@@ -3239,11 +3813,13 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() =>
-                    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))
+                    applyThemeChange((prev) =>
+                      prev === 'dark' ? 'light' : 'dark'
+                    )
                   }
-                  className="group w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold text-slate-200 hover:text-white hover:bg-white/[0.06] transition-all text-left cursor-pointer"
+                  className="group w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold text-ink-2 hover:text-ink hover:bg-chip-hover transition-all text-left cursor-pointer"
                 >
-                  <span className="w-7 h-7 rounded-lg bg-[#2563eb]/15 border border-[#3b82f6]/30 text-[#60a5fa] group-hover:bg-[#2563eb] group-hover:border-[#3b82f6] group-hover:text-white flex items-center justify-center shrink-0 transition-all">
+                  <span className="w-7 h-7 rounded-lg bg-brand/15 border border-brand-soft/30 text-brand-accent group-hover:bg-brand group-hover:border-brand-soft group-hover:text-white flex items-center justify-center shrink-0 transition-all">
                     {theme === 'light' ? (
                       <Moon className="w-3.5 h-3.5" strokeWidth={2} />
                     ) : (
@@ -3255,7 +3831,7 @@ export default function App() {
                   </span>
                 </button>
 
-                <div className="my-1 border-t border-white/10" />
+                <div className="my-1 border-t border-line" />
 
                 <button
                   type="button"
@@ -3263,9 +3839,9 @@ export default function App() {
                     setIsProfileDropdownOpen(false);
                     handleSignOut();
                   }}
-                  className="group w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold text-slate-300 hover:text-white hover:bg-white/[0.06] transition-all text-left cursor-pointer"
+                  className="group w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold text-ink-2 hover:text-ink hover:bg-chip-hover transition-all text-left cursor-pointer"
                 >
-                  <span className="w-7 h-7 rounded-lg bg-white/5 border border-white/10 text-slate-300 group-hover:bg-rose-500/20 group-hover:border-rose-500/40 group-hover:text-rose-300 flex items-center justify-center shrink-0 transition-all">
+                  <span className="w-7 h-7 rounded-lg bg-chip border border-line text-ink-2 group-hover:bg-rose-500/20 group-hover:border-rose-500/40 group-hover:text-rose-500 flex items-center justify-center shrink-0 transition-all">
                     <LogOut className="w-3.5 h-3.5" strokeWidth={2} />
                   </span>
                   <span>Sair</span>
@@ -3278,77 +3854,50 @@ export default function App() {
 
       {/* DEDICATED PDF READER WINDOW */}
       {activePdf ? (
-        <main className="relative z-10 flex-1 w-full max-w-[1440px] mx-auto px-4 md:px-12 py-6 flex flex-col space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-4 pb-3 border-b border-white/10">
-            <div className="flex items-center gap-3 min-w-0">
-              <button
-                type="button"
-                onClick={() => setActivePdf(null)}
-                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-xs font-semibold text-white transition-colors shrink-0 cursor-pointer"
-              >
-                <ArrowLeft className="w-4 h-4 text-[#3b82f6]" />
-                Voltar
-              </button>
-              <h1 className="text-sm md:text-base font-bold text-white truncate">
-                {activePdf.title}
-              </h1>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => triggerPdfDownload(activePdf.url, activePdf.title)}
-              className="px-4 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-semibold flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <Download className="w-3.5 h-3.5" />
-              Baixar PDF
-            </button>
-          </div>
-
-          <div className="flex-1 min-h-[75vh] rounded-2xl overflow-hidden bg-[#12101b] border border-white/10 flex items-center justify-center">
-            {isLoadingActivePdf ? (
-              <div className="flex flex-col items-center gap-3 text-slate-400 text-xs">
-                <div className="w-8 h-8 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
-                <span>Carregando PDF...</span>
-              </div>
-            ) : resolvedActivePdfUrl ? (
-              <iframe
-                src={resolvedActivePdfUrl}
-                title={activePdf.title}
-                className="w-full h-[75vh] border-0"
-              />
-            ) : (
-              <span className="text-xs text-slate-400">
-                Não foi possível exibir o PDF. Clique em Baixar PDF acima.
-              </span>
-            )}
-          </div>
+        <main className="relative z-10 flex-1 w-full max-w-[1440px] mx-auto px-3 sm:px-6 md:px-12 py-4 sm:py-6 flex flex-col">
+          <React.Suspense fallback={<LazyComponentFallback />}>
+            <PdfCanvasViewer
+              pdfUrl={activePdf.url}
+              title={activePdf.title}
+              watermarkInfo={
+                isAdmin
+                  ? null
+                  : {
+                      name: currentStudentWatermarkName,
+                      cpf: currentStudentWatermarkCpf,
+                      email: currentStudentWatermarkEmail,
+                    }
+              }
+              onBack={() => setActivePdf(null)}
+            />
+          </React.Suspense>
         </main>
       ) : activeCourse && !selectedPlaylistId && !activeLesson ? (
-        /* COURSE PLAYLISTS CARD VIEW (SHOWN WHEN STUDENT CLICKS A COURSE) */
+        /* COURSE PLAYLISTS CARD VIEW */
         <main className="relative z-10 flex-1 w-full max-w-[1440px] mx-auto px-4 sm:px-8 md:px-14 lg:px-20 py-6 space-y-5">
-          <div className="flex items-center gap-3.5 pb-4 border-b border-white/10 min-w-0">
+          <div className="flex items-center gap-3.5 pb-4 border-b border-line min-w-0">
             <button
               type="button"
               onClick={exitClassroom}
-              className="h-9 px-3.5 rounded-xl bg-[#0d1527] hover:bg-white/10 border border-white/10 text-xs font-semibold text-slate-200 hover:text-white transition-colors shrink-0 inline-flex items-center gap-1.5 cursor-pointer"
+              className="h-9 px-3.5 rounded-xl bg-surface hover:bg-chip-hover border border-line text-xs font-semibold text-ink-2 hover:text-ink transition-colors shrink-0 inline-flex items-center gap-1.5 cursor-pointer"
             >
-              <ArrowLeft className="w-3.5 h-3.5 text-[#3b82f6]" />
+              <ArrowLeft className="w-3.5 h-3.5 text-brand-soft" />
               <span>Voltar</span>
             </button>
 
             <div className="min-w-0">
-              <h1 className="text-lg sm:text-xl md:text-2xl font-extrabold tracking-tight text-white truncate">
+              <h1 className="text-lg sm:text-xl md:text-2xl font-extrabold tracking-tight text-ink truncate">
                 {activeCourse.title}
               </h1>
             </div>
           </div>
 
           {coursePlaylists.length === 0 ? (
-            <div className="p-10 rounded-2xl bg-[#0d1527] border border-white/10 text-center space-y-2">
-              <p className="text-sm font-bold text-white">
+            <div className="p-10 rounded-2xl bg-surface border border-line shadow-card text-center space-y-2">
+              <p className="text-sm font-bold text-ink">
                 Nenhuma playlist cadastrada neste curso ainda
               </p>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-ink-muted">
                 Assim que novas playlists forem adicionadas a este curso, elas aparecerão aqui em cards.
               </p>
             </div>
@@ -3363,7 +3912,7 @@ export default function App() {
                     key={pl.id}
                     type="button"
                     onClick={() => openPlaylistFromCourse(pl, activeCourse.id)}
-                    className="cover-poster-dark group relative w-full aspect-[2/3] rounded-2xl overflow-hidden border border-white/10 hover:border-[#3b82f6]/80 hover:-translate-y-1 text-left transition-all duration-300 shadow-lg cursor-pointer"
+                    className="cover-poster-dark group relative w-full aspect-[2/3] rounded-2xl overflow-hidden border border-white/10 hover:border-[#3b82f6]/80 hover:-translate-y-1 text-left transition-all duration-300 shadow-card cursor-pointer"
                   >
                     <CoverArtwork
                       src={pl.coverUrl}
@@ -3373,7 +3922,7 @@ export default function App() {
                     />
 
                     <div className="absolute top-2.5 right-2.5 z-10">
-                      <span className="px-2 py-0.5 rounded-md bg-black/65 backdrop-blur-md border border-white/15 text-[10px] font-mono font-bold text-white keep-white-text">
+                      <span className="px-2 py-0.5 rounded-md bg-black/65 border border-white/15 text-[10px] font-mono font-bold text-white keep-white-text">
                         {plLessonCount} aula{plLessonCount !== 1 ? 's' : ''}
                       </span>
                     </div>
@@ -3390,9 +3939,9 @@ export default function App() {
           )}
         </main>
       ) : activePlaylist && !activeLesson ? (
-        /* EMPTY PLAYLIST FALLBACK VIEW (IF PLAYLIST HAS 0 LESSONS YET) */
+        /* EMPTY PLAYLIST FALLBACK VIEW */
         <main className="relative z-10 flex-1 w-full max-w-5xl mx-auto px-4 md:px-10 py-6 space-y-5">
-          <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-white/10">
+          <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-line">
             <div className="flex items-center gap-3.5 min-w-0">
               <button
                 type="button"
@@ -3404,41 +3953,41 @@ export default function App() {
                     exitClassroom();
                   }
                 }}
-                className="h-9 px-3.5 rounded-xl bg-[#0d1527] hover:bg-white/10 border border-white/10 text-xs font-semibold text-slate-200 hover:text-white transition-colors shrink-0 inline-flex items-center gap-1.5 cursor-pointer"
+                className="h-9 px-3.5 rounded-xl bg-surface hover:bg-chip-hover border border-line text-xs font-semibold text-ink-2 hover:text-ink transition-colors shrink-0 inline-flex items-center gap-1.5 cursor-pointer"
               >
-                <ArrowLeft className="w-3.5 h-3.5 text-[#3b82f6]" />
+                <ArrowLeft className="w-3.5 h-3.5 text-brand-soft" />
                 <span>Voltar</span>
               </button>
 
               <div className="flex flex-wrap items-center gap-2 min-w-0">
                 {resolvedCourseForHeader && (
-                  <span className="text-xs sm:text-sm font-bold uppercase tracking-wider text-blue-300">
+                  <span className="text-xs sm:text-sm font-bold uppercase tracking-wider text-brand-accent">
                     {resolvedCourseForHeader.title}
                   </span>
                 )}
                 {resolvedCourseForHeader && activePlaylist && (
-                  <ArrowRight className="w-4 h-4 text-blue-300 shrink-0" />
+                  <ArrowRight className="w-4 h-4 text-brand-accent shrink-0" />
                 )}
-                <h1 className="text-sm sm:text-base font-extrabold tracking-tight text-white">
+                <h1 className="text-sm sm:text-base font-extrabold tracking-tight text-ink">
                   {activePlaylist.title}
                 </h1>
               </div>
             </div>
           </div>
 
-          <div className="p-10 rounded-2xl bg-[#0d1527] border border-white/10 text-center space-y-2">
-            <p className="text-sm font-bold text-white">
+          <div className="p-10 rounded-2xl bg-surface border border-line shadow-card text-center space-y-2">
+            <p className="text-sm font-bold text-ink">
               Nenhuma aula cadastrada nesta playlist ainda
             </p>
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-ink-muted">
               Clique em Voltar para selecionar outra playlist do curso.
             </p>
           </div>
         </main>
       ) : activeLesson ? (
         /* CLASSROOM WINDOW */
-        <main className="relative z-10 flex-1 w-full max-w-5xl mx-auto px-4 md:px-10 py-5">
-          {/* Backdrop overlay when lessons dropdown is open to separate it visually from the video */}
+        <SafeErrorBoundary>
+          <main className="relative z-10 flex-1 w-full max-w-5xl mx-auto px-4 md:px-10 py-5 min-w-0">
           {isLessonsDropdownOpen && (
             <div
               onClick={() => setIsLessonsDropdownOpen(false)}
@@ -3447,19 +3996,18 @@ export default function App() {
             />
           )}
 
-          {/* COURSE NAME [ARROW] PLAYLIST NAME PLAIN TEXT AT THE TOP OF THE SCREEN */}
           {(resolvedCourseForHeader || activePlaylist) && (
-            <div className="mb-3 px-0.5 flex flex-wrap items-center gap-2 min-w-0">
+            <div className="mb-3 px-0.5 flex items-center gap-2 min-w-0 overflow-hidden">
               {resolvedCourseForHeader && (
-                <span className="text-xs sm:text-sm font-bold uppercase tracking-wider text-blue-300">
+                <span className="text-xs sm:text-sm font-bold uppercase tracking-wider text-brand-accent truncate shrink-0 max-w-[48%]">
                   {resolvedCourseForHeader.title}
                 </span>
               )}
               {resolvedCourseForHeader && activePlaylist && (
-                <ArrowRight className="w-4 h-4 text-blue-300 shrink-0" />
+                <ArrowRight className="w-4 h-4 text-brand-accent shrink-0" />
               )}
               {activePlaylist && (
-                <h2 className="text-sm sm:text-base font-extrabold text-white">
+                <h2 className="text-sm sm:text-base font-extrabold text-ink truncate min-w-0">
                   {activePlaylist.title}
                 </h2>
               )}
@@ -3468,10 +4016,10 @@ export default function App() {
 
           {/* TOP BAR ABOVE VIDEO: [Voltar] --- [< 1/2 >] --- [Dropdown Aulas] */}
           <div className="flex items-center justify-between gap-2 mb-3.5 relative z-50 w-full">
-            {/* 1. Voltar Button (Left): Returns to Course Playlists cards if inside a course, else Home */}
             <button
               type="button"
               onClick={() => {
+                flushPendingWatchProgress();
                 if (selectedCourseId && selectedCourseId !== FREE_COURSE_ID) {
                   setSelectedPlaylistId(null);
                   setSelectedLessonId(null);
@@ -3480,31 +4028,31 @@ export default function App() {
                   exitClassroom();
                 }
               }}
-              className="h-9 px-3 rounded-xl bg-[#0d1527] hover:bg-white/10 border border-white/10 text-xs font-medium text-slate-200 hover:text-white transition-colors shrink-0 inline-flex items-center gap-1.5 cursor-pointer"
+              className="h-9 px-3 rounded-xl bg-surface hover:bg-chip-hover border border-line text-xs font-medium text-ink-2 hover:text-ink transition-colors shrink-0 inline-flex items-center gap-1.5 cursor-pointer"
             >
-              <ArrowLeft className="w-3.5 h-3.5 text-[#3b82f6]" />
+              <ArrowLeft className="w-3.5 h-3.5 text-brand-soft" />
               <span>Voltar</span>
             </button>
 
-            {/* 2. Compact Minimalist Previous / Next Lesson Control (Center) */}
-            <div className="h-9 inline-flex items-center gap-0.5 p-1 rounded-xl bg-[#0d1527] border border-white/10 shrink-0">
+            <div className="h-9 inline-flex items-center gap-0.5 p-1 rounded-xl bg-surface border border-line shrink-0">
               <button
                 type="button"
                 disabled={!prevLesson}
                 onClick={() => {
                   if (prevLesson) {
+                    flushPendingWatchProgress();
                     setSelectedLessonId(prevLesson.id);
                     setIsLessonsDropdownOpen(false);
                   }
                 }}
-                className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-slate-200 hover:text-white hover:bg-white/10 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-ink-2 hover:text-ink hover:bg-chip-hover disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
                 title="Aula anterior"
                 aria-label="Aula anterior"
               >
-                <ChevronLeft className="w-4 h-4 text-[#3b82f6]" />
+                <ChevronLeft className="w-4 h-4 text-brand-soft" />
               </button>
 
-              <span className="px-2 text-[11px] font-mono font-medium text-slate-300 tabular-nums select-none">
+              <span className="px-2 text-[11px] font-mono font-medium text-ink-2 tabular-nums select-none">
                 {currentLessonIndex >= 0
                   ? `${currentLessonIndex + 1} / ${orderedClassroomLessons.length}`
                   : '1 / 1'}
@@ -3515,52 +4063,52 @@ export default function App() {
                 disabled={!nextLesson}
                 onClick={() => {
                   if (nextLesson) {
+                    flushPendingWatchProgress();
                     setSelectedLessonId(nextLesson.id);
                     setIsLessonsDropdownOpen(false);
                   }
                 }}
-                className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-slate-200 hover:text-white hover:bg-white/10 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-ink-2 hover:text-ink hover:bg-chip-hover disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
                 title="Próxima aula"
                 aria-label="Próxima aula"
               >
-                <ChevronRight className="w-4 h-4 text-[#3b82f6]" />
+                <ChevronRight className="w-4 h-4 text-brand-soft" />
               </button>
             </div>
 
-            {/* 3. Lessons Dropdown Button & Menu (Top-Right Corner above Video) */}
             <div ref={lessonsDropdownRef} className="relative shrink-0">
               <button
                 type="button"
                 onClick={() => setIsLessonsDropdownOpen((prev) => !prev)}
                 className={`h-9 px-3 rounded-xl border text-xs font-medium inline-flex items-center gap-1.5 transition-all cursor-pointer ${
                   isLessonsDropdownOpen
-                    ? 'bg-[#2563eb] border-[#93c5fd] text-white shadow-[0_0_20px_rgba(37,99,235,0.45)]'
-                    : 'bg-[#0d1527] hover:bg-white/10 border-white/10 text-slate-200 hover:text-white'
+                    ? 'bg-brand border-brand-accent text-white shadow-glow-md'
+                    : 'bg-surface hover:bg-chip-hover border-line text-ink-2 hover:text-ink'
                 }`}
               >
                 <ListVideo
                   className={`w-3.5 h-3.5 ${
-                    isLessonsDropdownOpen ? 'text-white' : 'text-[#3b82f6]'
+                    isLessonsDropdownOpen ? 'text-white' : 'text-brand-soft'
                   }`}
                 />
                 <span>Aulas</span>
                 <ChevronDown
                   className={`w-3.5 h-3.5 transition-transform duration-200 ${
-                    isLessonsDropdownOpen ? 'rotate-180 text-white' : 'text-slate-400'
+                    isLessonsDropdownOpen ? 'rotate-180 text-white' : 'text-ink-muted'
                   }`}
                 />
               </button>
 
               {isLessonsDropdownOpen && (
-                <div className="absolute right-0 top-full mt-2.5 w-[calc(100vw-2rem)] sm:w-84 max-w-[350px] max-h-[68vh] overflow-y-auto rounded-2xl bg-[#0f1b33] border border-[#3b82f6]/50 ring-1 ring-white/10 shadow-[0_28px_70px_rgba(0,0,0,0.95),0_0_32px_rgba(37,99,235,0.28)] overflow-hidden z-50">
-                  <div className="px-4 py-3 bg-[#231e3a] border-b border-white/10 flex items-center justify-between gap-2">
+                <div className="absolute right-0 top-full mt-2.5 w-[calc(100vw-2rem)] sm:w-84 max-w-[350px] max-h-[68dvh] overflow-y-auto rounded-2xl bg-surface border border-brand-soft/50 shadow-pop overflow-hidden z-50">
+                  <div className="px-4 py-3 bg-surface-2 border-b border-line flex items-center justify-between gap-2">
                     <div className="min-w-0">
                       {resolvedCourseForHeader && (
-                        <span className="block text-[10px] font-bold uppercase tracking-wider text-blue-300 truncate">
+                        <span className="block text-[10px] font-bold uppercase tracking-wider text-brand-accent truncate">
                           {resolvedCourseForHeader.title}
                         </span>
                       )}
-                      <h2 className="text-xs font-bold text-white truncate">
+                      <h2 className="text-xs font-bold text-ink truncate">
                         {activePlaylist
                           ? activePlaylist.title
                           : resolvedCourseForHeader
@@ -3568,101 +4116,77 @@ export default function App() {
                             : 'Selecionar Aula'}
                       </h2>
                     </div>
-                    <span className="px-2 py-0.5 rounded-md bg-white/10 text-[10px] font-mono font-semibold text-blue-200 shrink-0">
+                    <span className="px-2 py-0.5 rounded-md bg-chip text-[10px] font-mono font-semibold text-brand-accent shrink-0">
                       {orderedClassroomLessons.length} aula
                       {orderedClassroomLessons.length !== 1 ? 's' : ''}
                     </span>
                   </div>
 
                   <div className="p-3.5 space-y-1.5">
-                    {orderedClassroomLessons.map((lesson, idx) => {
-                      const isCurrent = lesson.id === activeLesson.id;
-                      const isDone =
-                        userProgress?.completedLessonIds.includes(lesson.id);
-                      return (
-                        <button
-                          key={lesson.id}
-                          type="button"
-                          onClick={() => {
-                            setSelectedLessonId(lesson.id);
-                            setIsLessonsDropdownOpen(false);
-                          }}
-                          className={`w-full flex items-center justify-between gap-2.5 p-2.5 rounded-xl text-left transition-all cursor-pointer ${
-                            isCurrent
-                              ? 'bg-[#2563eb] border border-[#93c5fd] text-white shadow-[0_6px_16px_rgba(37,99,235,0.35)]'
-                              : 'bg-[#231f3a]/80 hover:bg-[#1a2e56] border border-white/10 text-slate-200'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <div
-                              className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-mono tabular-nums shrink-0 ${
-                                isCurrent
-                                  ? 'bg-white text-[#1d4ed8] font-bold'
-                                  : isDone
-                                    ? 'bg-emerald-500/20 text-emerald-400'
-                                    : 'bg-white/10 text-slate-300'
-                              }`}
-                            >
-                              {isDone ? (
-                                <CheckCircle2 className="w-3.5 h-3.5" />
-                              ) : (
-                                idx + 1
-                              )}
-                            </div>
-                            <p
-                              className={`text-xs truncate ${
-                                isCurrent
-                                  ? 'font-bold text-white'
-                                  : 'font-medium text-slate-200'
-                              }`}
-                            >
-                              {lesson.title}
-                            </p>
-                          </div>
-
-                          {isCurrent && (
-                            <Play className="w-3.5 h-3.5 text-white fill-current shrink-0" />
-                          )}
-                        </button>
-                      );
-                    })}
+                    {orderedClassroomLessons.map((lesson, idx) => (
+                      <ClassroomLessonRow
+                        key={lesson.id}
+                        lesson={lesson}
+                        idx={idx}
+                        isCurrent={lesson.id === activeLesson.id}
+                        isDone={Boolean(
+                          userProgress?.completedLessonIds.includes(lesson.id)
+                        )}
+                        onSelect={handleSelectLessonFromDropdown}
+                      />
+                    ))}
                   </div>
                 </div>
               )}
             </div>
           </div>
 
-          <div className="space-y-6">
+          <div className="w-full space-y-6">
             {hasLessonVideo(activeLesson.youtubeId) && (
-              <StealthVideoPlayer
-                youtubeIdOrUrl={activeLesson.youtubeId}
-                title={activeLesson.title}
-                subtitle={activeCourse?.title}
-                initialTimeSec={
-                  lessonWatchMap[activeLesson.id]?.currentTimeSec || 0
-                }
-                onTimeUpdate={(currentTimeSec, durationSec) =>
-                  handleLessonTimeUpdate(
-                    activeLesson.id,
-                    currentTimeSec,
-                    durationSec
-                  )
-                }
-                isCompleted={userProgress?.completedLessonIds.includes(
-                  activeLesson.id
-                )}
-                onToggleComplete={() => toggleCompletedLesson(activeLesson.id)}
-                hasNextLesson={Boolean(nextLesson)}
-                onNextLesson={() => {
-                  if (nextLesson) setSelectedLessonId(nextLesson.id);
-                }}
-                theaterMode={theaterMode}
-                onToggleTheaterMode={() => setTheaterMode((prev) => !prev)}
-              />
+              <div className="w-full aspect-video relative shrink-0">
+                <StealthVideoPlayer
+                  youtubeIdOrUrl={activeLesson.youtubeId}
+                  title={activeLesson.title}
+                  subtitle={activeCourse?.title}
+                  thumbnailUrl={activeLesson.thumbnailUrl}
+                  watermarkText={
+                    isAdmin
+                      ? ''
+                      : `${currentStudentWatermarkName} • ${currentStudentWatermarkEmail}`
+                  }
+                  initialTimeSec={
+                    pendingLessonProgressRef.current[activeLesson.id]
+                      ?.currentTimeSec ??
+                    lessonWatchMap[activeLesson.id]?.currentTimeSec ??
+                    0
+                  }
+                  onTimeUpdate={(currentTimeSec, durationSec, forceFlush) =>
+                    handleLessonTimeUpdate(
+                      activeLesson.id,
+                      currentTimeSec,
+                      durationSec,
+                      forceFlush
+                    )
+                  }
+                  isCompleted={userProgress?.completedLessonIds.includes(
+                    activeLesson.id
+                  )}
+                  onToggleComplete={() => toggleCompletedLesson(activeLesson.id)}
+                  hasNextLesson={Boolean(nextLesson)}
+                  onNextLesson={() => {
+                    if (nextLesson) {
+                      flushPendingWatchProgress();
+                      setSelectedLessonId(nextLesson.id);
+                    }
+                  }}
+                  theaterMode={theaterMode}
+                  onToggleTheaterMode={() => setTheaterMode((prev) => !prev)}
+                />
+              </div>
             )}
 
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-white/10">
-              <h1 className="text-xl md:text-2xl font-bold text-white tracking-tight">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-line">
+              <h1 className="text-xl md:text-2xl font-bold text-ink tracking-tight">
                 {activeLesson.title}
               </h1>
 
@@ -3672,8 +4196,8 @@ export default function App() {
                   onClick={() => toggleCompletedLesson(activeLesson.id)}
                   className={`px-4 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                     userProgress?.completedLessonIds.includes(activeLesson.id)
-                      ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300'
-                      : 'bg-[#2563eb] hover:bg-[#1d4ed8] text-white'
+                      ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-500'
+                      : 'bg-brand hover:bg-brand-hover text-white'
                   }`}
                 >
                   <CheckCircle2 className="w-4 h-4" />
@@ -3686,7 +4210,7 @@ export default function App() {
 
             {activeLesson.description && (
               <div className="space-y-1.5">
-                <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line max-w-[68ch]">
+                <p className="text-sm text-ink-2 leading-relaxed whitespace-pre-line max-w-[68ch]">
                   {activeLesson.description}
                 </p>
               </div>
@@ -3694,8 +4218,8 @@ export default function App() {
 
             {activeLesson.pdfs && activeLesson.pdfs.length > 0 && (
               <div className="space-y-3 pt-2">
-                <h2 className="text-sm font-bold text-white flex items-center gap-2">
-                  <FileText className="w-4 h-4 text-[#3b82f6]" />
+                <h2 className="text-sm font-bold text-ink flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-brand-soft" />
                   PDFs da Aula
                 </h2>
 
@@ -3703,13 +4227,13 @@ export default function App() {
                   {activeLesson.pdfs.map((pdf) => (
                     <div
                       key={pdf.id}
-                      className="flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-[#0d1527] border border-white/10 hover:border-[#3b82f6]/40 transition-colors"
+                      className="flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-surface border border-line hover:border-brand-soft/40 shadow-card transition-colors"
                     >
                       <div className="flex items-center gap-3 min-w-0">
-                        <div className="w-10 h-10 rounded-xl bg-[#2563eb]/15 border border-[#2563eb]/30 text-blue-300 flex items-center justify-center shrink-0">
+                        <div className="w-10 h-10 rounded-xl bg-brand/15 border border-brand/30 text-brand-accent flex items-center justify-center shrink-0">
                           <FileText className="w-5 h-5" />
                         </div>
-                        <p className="text-xs font-bold text-white truncate">
+                        <p className="text-xs font-bold text-ink truncate">
                           {pdf.title}
                         </p>
                       </div>
@@ -3718,14 +4242,14 @@ export default function App() {
                         <button
                           type="button"
                           onClick={() => setActivePdf(pdf)}
-                          className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-xs font-semibold text-white transition-colors cursor-pointer"
+                          className="px-3 py-1.5 rounded-lg bg-chip hover:bg-chip-hover text-xs font-semibold text-ink transition-colors cursor-pointer"
                         >
                           Ler
                         </button>
                         <button
                           type="button"
                           onClick={() => triggerPdfDownload(pdf.url, pdf.title)}
-                          className="p-2 rounded-lg bg-[#2563eb] hover:bg-[#1d4ed8] text-white transition-colors cursor-pointer"
+                          className="p-2 rounded-lg bg-brand hover:bg-brand-hover text-white transition-colors cursor-pointer"
                           title="Baixar PDF"
                         >
                           <Download className="w-3.5 h-3.5" />
@@ -3738,6 +4262,7 @@ export default function App() {
             )}
           </div>
         </main>
+        </SafeErrorBoundary>
       ) : activeNav === 'admin' && isAdmin ? (
         /* ADMIN MANAGEMENT WINDOW */
         <main className="relative z-10 flex-1 w-full">
@@ -3784,24 +4309,22 @@ export default function App() {
       ) : (
         /* SHOWCASE HOME & FILTERED WINDOWS */
         <main className="relative z-10 flex-1 w-full max-w-[1440px] mx-auto px-4 sm:px-8 md:px-14 lg:px-20">
-          {/* HERO SECTION ON HOME + MINIMALIST INTERACTIVE CIRCULAR CALENDAR ICON */}
           {activeNav === 'home' && (
             <section className="pt-8 pb-8 md:pt-14 md:pb-12 flex flex-col sm:flex-row sm:items-start justify-between gap-5">
               <div className="max-w-2xl space-y-4">
-                <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold tracking-tight text-white text-balance leading-[1.14]">
+                <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold tracking-tight text-ink text-balance leading-[1.14]">
                   {displayHeroTitle}
                 </h1>
-                <p className="text-xs sm:text-sm md:text-base text-slate-300/90 max-w-lg font-medium leading-relaxed">
+                <p className="text-xs sm:text-sm md:text-base text-ink-2 max-w-lg font-medium leading-relaxed">
                   {displayHeroSubtitle}
                 </p>
 
-                {/* "Confira agora!" button ONLY appears for Blocked Students */}
                 {isBlockedUser && (
                   <div className="pt-2">
                     <button
                       type="button"
                       onClick={openFreeModule}
-                      className="px-7 py-3 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] active:scale-95 text-white text-sm font-bold shadow-[0_6px_30px_rgba(37,99,235,0.55)] transition-all whitespace-nowrap shrink-0 cursor-pointer"
+                      className="px-7 py-3 rounded-full bg-brand hover:bg-brand-hover active:scale-95 text-white text-sm font-bold shadow-glow-lg transition-all whitespace-nowrap shrink-0 cursor-pointer"
                     >
                       {platformConfig.heroCtaText || 'Confira agora!'}
                     </button>
@@ -3809,7 +4332,6 @@ export default function App() {
                 )}
               </div>
 
-              {/* MINIMALIST INTERACTIVE CIRCULAR CALENDAR BUTTON (SOMENTE ADMIN NO TOPO DA TELA INICIAL) */}
               {isAdmin && (
                 <div className="shrink-0 self-start">
                   <button
@@ -3817,19 +4339,19 @@ export default function App() {
                     onClick={() => setIsCalendarModalOpen(true)}
                     title="Abrir Calendário do Curso (Assuntos da Semana, Eventos e Feriados)"
                     aria-label="Abrir Calendário Acadêmico"
-                    className="group relative inline-flex items-center gap-3 p-1.5 pr-4 rounded-full bg-[#0a1224]/90 hover:bg-[#162544] border border-[#3b82f6]/45 hover:border-[#60a5fa] shadow-[0_10px_32px_rgba(37,99,235,0.32)] hover:shadow-[0_12px_38px_rgba(96,165,250,0.55)] transition-all duration-300 active:scale-95 cursor-pointer"
+                    className="group relative inline-flex items-center gap-3 p-1.5 pr-4 rounded-full bg-surface hover:bg-surface-2 border border-brand-soft/45 hover:border-brand-accent shadow-glow-sm hover:shadow-glow-md transition-all duration-300 active:scale-95 cursor-pointer"
                   >
-                    <span className="relative w-11 h-11 rounded-full bg-gradient-to-tr from-[#2563eb] via-[#2563eb] to-[#93c5fd] text-white flex items-center justify-center shadow-[0_0_20px_rgba(59,130,246,0.65)] group-hover:scale-105 group-hover:rotate-6 transition-all duration-300 keep-white-text">
+                    <span className="relative w-11 h-11 rounded-full bg-gradient-to-tr from-[#2563eb] via-[#2563eb] to-[#93c5fd] text-white flex items-center justify-center shadow-glow-sm group-hover:scale-105 group-hover:rotate-6 transition-all duration-300 keep-white-text">
                       <CalendarIcon className="w-5 h-5" />
-                      <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-emerald-400 border-2 border-[#0a1224] flex items-center justify-center">
+                      <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-emerald-400 border-2 border-surface flex items-center justify-center">
                         <Sparkles className="w-2 h-2 text-black" />
                       </span>
                     </span>
                     <div className="text-left">
-                      <span className="block text-xs font-extrabold text-white group-hover:text-blue-200 transition-colors">
+                      <span className="block text-xs font-extrabold text-ink group-hover:text-brand-accent transition-colors">
                         Calendário
                       </span>
-                      <span className="block text-[10px] font-semibold text-blue-300/90">
+                      <span className="block text-[10px] font-semibold text-brand-accent">
                         Semana & Eventos
                       </span>
                     </div>
@@ -3842,12 +4364,11 @@ export default function App() {
           <div className="py-2 space-y-10">
             {activeNav === 'home' && (
               <>
-                {/* CONTINUE WATCHING LESSON CARD AT THE TOP OF HOME */}
                 {continueWatchingData && (
                   <section className="space-y-2.5">
                     <div className="flex items-center justify-between gap-2">
-                      <h2 className="text-xs sm:text-sm font-bold uppercase tracking-wider text-blue-300 flex items-center gap-2">
-                        <Play className="w-3.5 h-3.5 text-[#3b82f6] fill-current" />
+                      <h2 className="text-xs sm:text-sm font-bold uppercase tracking-wider text-brand-accent flex items-center gap-2">
+                        <Play className="w-3.5 h-3.5 text-brand-soft fill-current" />
                         <span>Continuar de onde parou</span>
                       </h2>
                     </div>
@@ -3869,20 +4390,20 @@ export default function App() {
                         setSelectedLessonId(continueWatchingData.lesson.id);
                         setIsLessonsDropdownOpen(false);
                       }}
-                      className="w-full sm:max-w-xl p-3.5 sm:p-4 rounded-2xl bg-[#0d1527]/95 hover:bg-[#132240] border border-[#3b82f6]/35 hover:border-[#3b82f6]/80 transition-all flex items-center gap-3.5 sm:gap-4 text-left group shadow-lg cursor-pointer"
+                      className="w-full sm:max-w-xl p-3.5 sm:p-4 rounded-2xl bg-surface hover:bg-surface-2 border border-brand-soft/35 hover:border-brand-soft/80 transition-all flex items-center gap-3.5 sm:gap-4 text-left group shadow-card cursor-pointer"
                     >
-                      <div className="w-11 h-11 rounded-full bg-[#2563eb] text-white flex items-center justify-center shadow-[0_4px_16px_rgba(37,99,235,0.45)] group-hover:scale-105 transition-transform shrink-0 keep-white-text">
+                      <div className="w-11 h-11 rounded-full bg-brand text-white flex items-center justify-center shadow-glow-sm group-hover:scale-105 transition-transform shrink-0 keep-white-text">
                         <Play className="w-4 h-4 fill-current ml-0.5" />
                       </div>
 
                       <div className="min-w-0 flex-1 space-y-1.5">
-                        <p className="text-xs sm:text-sm font-bold text-white truncate">
+                        <p className="text-xs sm:text-sm font-bold text-ink truncate">
                           {continueWatchingData.lesson.title}
                         </p>
 
-                        <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
+                        <div className="w-full h-1.5 rounded-full bg-chip overflow-hidden">
                           <div
-                            className="h-full bg-[#3b82f6] rounded-full transition-all"
+                            className="h-full bg-brand-soft rounded-full transition-all"
                             style={{
                               width: `${Math.max(8, continueWatchingData.progressPercent)}%`,
                             }}
@@ -3890,17 +4411,16 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div className="shrink-0 pr-1 text-[#3b82f6] group-hover:translate-x-0.5 transition-transform">
+                      <div className="shrink-0 pr-1 text-brand-soft group-hover:translate-x-0.5 transition-transform">
                         <ChevronRight className="w-5 h-5" />
                       </div>
                     </button>
                   </section>
                 )}
 
-                {/* Courses Vertical Portrait Grid (2 on Mobile, 5 on Tablet, 7 on PC) */}
                 {homeCourses.length > 0 && (
                   <section className="space-y-4">
-                    <h2 className="text-base md:text-lg font-bold text-white tracking-tight">
+                    <h2 className="text-base md:text-lg font-bold text-ink tracking-tight">
                       Cursos
                     </h2>
 
@@ -3913,7 +4433,7 @@ export default function App() {
                           key={course.id}
                           type="button"
                           onClick={() => openCourse(course)}
-                          className="cover-poster-dark group relative w-full aspect-[2/3] rounded-2xl overflow-hidden border border-white/10 hover:border-[#3b82f6]/80 hover:-translate-y-1 text-left transition-all duration-300 shadow-xl cursor-pointer"
+                          className="cover-poster-dark group relative w-full aspect-[2/3] rounded-2xl overflow-hidden border border-white/10 hover:border-[#3b82f6]/80 hover:-translate-y-1 text-left transition-all duration-300 shadow-card cursor-pointer"
                         >
                           <CoverArtwork
                             src={course.coverUrl}
@@ -3936,7 +4456,7 @@ export default function App() {
               </>
             )}
 
-            {/* SIMULADOS TAB (REPLACES AULAS IN BOTTOM BAR & NAV) */}
+            {/* SIMULADOS TAB */}
             {activeNav === 'simulados' && (
               <React.Suspense fallback={<LazyComponentFallback />}>
                 {isSimuladoEditorOpen && isAdmin ? (
@@ -3957,7 +4477,7 @@ export default function App() {
                   </div>
                 ) : (
                   <SimuladosWindow
-                    simulados={simulados}
+                    simulados={resolvedSimulados}
                     submissions={activeSimuladoSubmissions}
                     currentUserUid={user.uid}
                     currentUserName={
@@ -3987,7 +4507,7 @@ export default function App() {
               </React.Suspense>
             )}
 
-            {/* DÚVIDAS SOCIAL Q&A TAB (REPLACES FAVORITES) */}
+            {/* DÚVIDAS SOCIAL Q&A TAB */}
             {activeNav === 'duvidas' && (
               <React.Suspense fallback={<LazyComponentFallback />}>
                 <DuvidasWindow
@@ -4003,12 +4523,30 @@ export default function App() {
                   }
                   currentUserPhotoUrl={user.photoURL || ''}
                   isAdmin={isAdmin}
+                  isBlockedUser={isBlockedUser}
                   onCreateDoubt={handleCreateDoubt}
                   onToggleLikeDoubt={handleToggleLikeDoubt}
                   onToggleResolveDoubt={handleToggleResolveDoubt}
                   onDeleteDoubt={requestDeleteDoubt}
                   onCreateReply={handleCreateReply}
                   onDeleteReply={requestDeleteDoubtReply}
+                />
+              </React.Suspense>
+            )}
+
+            {/* MENTORIA STUDENT HUB TAB */}
+            {activeNav === 'mentoria' && (
+              <React.Suspense fallback={<LazyComponentFallback />}>
+                <MentoriaWindow
+                  userEmail={user.email || ''}
+                  userName={
+                    myStudentRecord?.name ||
+                    userProgress?.displayName ||
+                    user.displayName ||
+                    user.email?.split('@')[0] ||
+                    'Aluno'
+                  }
+                  isBlockedUser={!isAdmin && isBlockedUser}
                 />
               </React.Suspense>
             )}
@@ -4024,12 +4562,12 @@ export default function App() {
                         exitClassroom();
                         setActiveNav('home');
                       }}
-                      className="h-9 px-3.5 rounded-xl bg-[#0d1527] hover:bg-white/10 border border-white/10 text-xs font-semibold text-slate-200 hover:text-white transition-colors shrink-0 inline-flex items-center gap-1.5 cursor-pointer"
+                      className="h-9 px-3.5 rounded-xl bg-surface hover:bg-chip-hover border border-line text-xs font-semibold text-ink-2 hover:text-ink transition-colors shrink-0 inline-flex items-center gap-1.5 cursor-pointer"
                     >
-                      <ArrowLeft className="w-3.5 h-3.5 text-[#3b82f6]" />
+                      <ArrowLeft className="w-3.5 h-3.5 text-brand-soft" />
                       <span>Voltar</span>
                     </button>
-                    <h2 className="text-xl font-bold text-white">
+                    <h2 className="text-xl font-bold text-ink">
                       {activeNav === 'free' && 'Aulas Grátis'}
                       {activeNav === 'lessons' && 'Aulas'}
                     </h2>
@@ -4046,8 +4584,8 @@ export default function App() {
 
                   if (list.length === 0) {
                     return (
-                      <div className="py-16 text-center rounded-2xl bg-[#0d1527]/60 border border-white/5">
-                        <p className="text-sm text-slate-400">
+                      <div className="py-16 text-center rounded-2xl bg-surface border border-line-soft shadow-card">
+                        <p className="text-sm text-ink-muted">
                           Nenhuma aula disponível.
                         </p>
                       </div>
@@ -4060,7 +4598,7 @@ export default function App() {
                         <div
                           key={lesson.id}
                           onClick={() => openDirectLesson(lesson)}
-                          className="group rounded-2xl bg-[#0d1527] border border-white/10 hover:border-[#3b82f6]/60 overflow-hidden transition-all flex flex-col cursor-pointer"
+                          className="cv-auto-row group rounded-2xl bg-surface border border-line hover:border-brand-soft/60 shadow-card overflow-hidden transition-all flex flex-col cursor-pointer"
                         >
                           <div className="relative aspect-video bg-black overflow-hidden">
                             <CoverArtwork
@@ -4070,14 +4608,14 @@ export default function App() {
                               showBottomPurpleBar={false}
                             />
                             <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                              <div className="w-11 h-11 rounded-full bg-[#2563eb] text-white flex items-center justify-center shadow-lg">
+                              <div className="w-11 h-11 rounded-full bg-brand text-white flex items-center justify-center shadow-lg">
                                 <Play className="w-5 h-5 fill-current ml-0.5" />
                               </div>
                             </div>
                           </div>
 
                           <div className="p-3.5">
-                            <h3 className="text-xs font-bold text-white line-clamp-2 group-hover:text-blue-300 transition-colors">
+                            <h3 className="text-xs font-bold text-ink line-clamp-2 group-hover:text-brand-accent transition-colors">
                               {lesson.title}
                             </h3>
                           </div>
@@ -4094,7 +4632,7 @@ export default function App() {
 
       {/* MOBILE BOTTOM NAVIGATION BAR */}
       <nav
-        className={`md:hidden fixed bottom-0 inset-x-0 z-[80] bg-[#070b14]/95 backdrop-blur-xl border-t border-white/10 px-2 py-2 flex items-center justify-around ${
+        className={`md:hidden fixed bottom-0 inset-x-0 z-[80] bg-canvas/95 backdrop-blur-xl border-t border-line px-1.5 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] flex items-center justify-around ${
           isAdmin && isCalendarModalOpen ? 'hidden' : ''
         }`}
       >
@@ -4105,17 +4643,16 @@ export default function App() {
             exitClassroom();
             setActiveNav('home');
           }}
-          className={`flex flex-col items-center gap-1 py-1 px-2.5 rounded-xl text-[11px] font-medium transition-colors cursor-pointer ${
+          className={`flex flex-col items-center gap-1 py-1 px-2 rounded-xl text-[10px] sm:text-[11px] font-medium transition-colors cursor-pointer ${
             activeNav === 'home' && !activeLesson && !activePdf && !isCalendarModalOpen
-              ? 'text-[#60a5fa] font-bold'
-              : 'text-slate-400'
+              ? 'text-brand-accent font-bold'
+              : 'text-ink-muted'
           }`}
         >
           <Home className="w-4 h-4" />
           <span>Início</span>
         </button>
 
-        {/* 2º ÍCONE DO MENU INFERIOR: CALENDÁRIO (EXCLUSIVO PARA OS ALUNOS - !isAdmin) */}
         {!isAdmin && (
           <button
             type="button"
@@ -4123,10 +4660,10 @@ export default function App() {
               exitClassroom();
               setIsCalendarModalOpen(true);
             }}
-            className={`flex flex-col items-center gap-1 py-1 px-2.5 rounded-xl text-[11px] font-medium transition-colors cursor-pointer ${
+            className={`flex flex-col items-center gap-1 py-1 px-2 rounded-xl text-[10px] sm:text-[11px] font-medium transition-colors cursor-pointer ${
               isCalendarModalOpen
-                ? 'text-[#60a5fa] font-bold'
-                : 'text-slate-400'
+                ? 'text-brand-accent font-bold'
+                : 'text-ink-muted'
             }`}
           >
             <CalendarIcon className="w-4 h-4" />
@@ -4141,10 +4678,10 @@ export default function App() {
             exitClassroom();
             setActiveNav('simulados');
           }}
-          className={`flex flex-col items-center gap-1 py-1 px-2.5 rounded-xl text-[11px] font-medium transition-colors cursor-pointer ${
+          className={`flex flex-col items-center gap-1 py-1 px-2 rounded-xl text-[10px] sm:text-[11px] font-medium transition-colors cursor-pointer ${
             activeNav === 'simulados' && !activeLesson && !activePdf && !isCalendarModalOpen
-              ? 'text-[#60a5fa] font-bold'
-              : 'text-slate-400'
+              ? 'text-brand-accent font-bold'
+              : 'text-ink-muted'
           }`}
         >
           <ClipboardCheck className="w-4 h-4" />
@@ -4158,17 +4695,35 @@ export default function App() {
             exitClassroom();
             setActiveNav('duvidas');
           }}
-          className={`flex flex-col items-center gap-1 py-1 px-2.5 rounded-xl text-[11px] font-medium transition-colors cursor-pointer ${
+          className={`flex flex-col items-center gap-1 py-1 px-2 rounded-xl text-[10px] sm:text-[11px] font-medium transition-colors cursor-pointer ${
             activeNav === 'duvidas' && !activeLesson && !activePdf && !isCalendarModalOpen
-              ? 'text-[#60a5fa] font-bold'
-              : 'text-slate-400'
+              ? 'text-brand-accent font-bold'
+              : 'text-ink-muted'
           }`}
         >
           <MessageCircle className="w-4 h-4" />
           <span>Dúvidas</span>
         </button>
 
-        {/* MENU INFERIOR DO ADMIN: MANTIDO COMO ESTAVA ORIGINALMENTE (SEM O CALENDÁRIO) */}
+        {hasActiveMentoria && (
+          <button
+            type="button"
+            onClick={() => {
+              setIsCalendarModalOpen(false);
+              exitClassroom();
+              setActiveNav('mentoria');
+            }}
+            className={`flex flex-col items-center gap-1 py-1 px-2 rounded-xl text-[10px] sm:text-[11px] font-medium transition-colors cursor-pointer ${
+              activeNav === 'mentoria' && !activeLesson && !activePdf && !isCalendarModalOpen
+                ? 'text-brand-accent font-bold'
+                : 'text-ink-muted'
+            }`}
+          >
+            <Compass className="w-4 h-4" />
+            <span>Mentoria</span>
+          </button>
+        )}
+
         {isAdmin && (
           <button
             type="button"
@@ -4177,10 +4732,10 @@ export default function App() {
               exitClassroom();
               setActiveNav('admin');
             }}
-            className={`flex flex-col items-center gap-1 py-1 px-2.5 rounded-xl text-[11px] font-medium transition-colors cursor-pointer ${
+            className={`flex flex-col items-center gap-1 py-1 px-2 rounded-xl text-[10px] sm:text-[11px] font-medium transition-colors cursor-pointer ${
               activeNav === 'admin' && !activeLesson && !activePdf && !isCalendarModalOpen
-                ? 'text-[#60a5fa] font-bold'
-                : 'text-slate-400'
+                ? 'text-brand-accent font-bold'
+                : 'text-ink-muted'
             }`}
           >
             <Sliders className="w-4 h-4" />
@@ -4189,29 +4744,30 @@ export default function App() {
         )}
       </nav>
 
-      {/* USER PROFILE MODAL (EDITABLE NAME & PHONE, READ-ONLY CPF & EMAIL) */}
+      {/* USER PROFILE MODAL */}
       {isProfileModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-md rounded-3xl bg-[#0d1527] border border-white/10 shadow-2xl overflow-hidden">
-            <div className="px-6 py-4 border-b border-white/10 flex items-center justify-between gap-3">
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-0 sm:p-4">
+          <div className="w-full h-[100dvh] max-h-[100dvh] sm:h-auto sm:max-h-[90dvh] sm:max-w-md rounded-none sm:rounded-3xl bg-surface border-0 sm:border border-line shadow-pop overflow-hidden flex flex-col">
+            <div className="px-5 sm:px-6 pb-4 pt-[max(1rem,env(safe-area-inset-top))] sm:pt-4 border-b border-line flex items-center justify-between gap-3 shrink-0">
               <div className="flex items-center gap-3 min-w-0">
                 {user.photoURL ? (
                   <img
                     src={user.photoURL}
                     alt={profileNameInput || 'Perfil'}
+                    decoding="async"
                     referrerPolicy="no-referrer"
-                    className="w-10 h-10 rounded-full object-cover border border-white/15 shrink-0"
+                    className="w-10 h-10 rounded-full object-cover border border-line shrink-0"
                   />
                 ) : (
-                  <div className="w-10 h-10 rounded-full bg-[#2563eb] text-white flex items-center justify-center text-sm font-extrabold shrink-0">
+                  <div className="w-10 h-10 rounded-full bg-brand text-white flex items-center justify-center text-sm font-extrabold shrink-0">
                     {(profileNameInput || user.email || 'A')[0].toUpperCase()}
                   </div>
                 )}
                 <div className="min-w-0">
-                  <h2 className="text-base font-extrabold tracking-tight text-white truncate">
+                  <h2 className="text-base font-extrabold tracking-tight text-ink truncate">
                     Meu Perfil
                   </h2>
-                  <p className="text-xs text-slate-300/90 font-medium truncate">
+                  <p className="text-xs text-ink-2 font-medium truncate">
                     Dados da sua conta
                   </p>
                 </div>
@@ -4220,38 +4776,41 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setIsProfileModalOpen(false)}
-                className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                className="w-10 h-10 rounded-xl text-ink-muted hover:text-ink hover:bg-chip-hover flex items-center justify-center transition-colors cursor-pointer shrink-0"
                 aria-label="Fechar perfil"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveUserProfile} className="p-6 space-y-4">
-              {/* Aparência / Tema Claro & Escuro */}
+            <form
+              noValidate
+              onSubmit={handleSaveUserProfile}
+              className="flex-1 overflow-y-auto p-5 sm:p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:pb-6 space-y-4"
+            >
               <div>
-                <label className="block text-xs font-semibold text-slate-200 mb-1.5">
+                <label className="block text-xs font-semibold text-ink-2 mb-1.5">
                   Aparência da Plataforma
                 </label>
                 <div
                   role="group"
                   aria-label="Selecionar tema da plataforma"
-                  className="relative grid grid-cols-2 p-1 rounded-2xl bg-[#070b14] border border-white/10 select-none"
+                  className="relative grid grid-cols-2 p-1 rounded-2xl bg-inset border border-line select-none"
                 >
                   <div
                     aria-hidden="true"
-                    className={`pointer-events-none absolute top-1 bottom-1 left-1 w-[calc(50%-4px)] rounded-xl bg-[#2563eb] shadow-[0_4px_16px_rgba(37,99,235,0.45)] transition-transform duration-200 ease-out ${
+                    className={`pointer-events-none absolute top-1 bottom-1 left-1 w-[calc(50%-4px)] rounded-xl bg-brand shadow-glow-sm transition-transform duration-200 ease-out ${
                       theme === 'light' ? 'translate-x-full' : 'translate-x-0'
                     }`}
                   />
 
                   <button
                     type="button"
-                    onClick={() => setTheme('dark')}
+                    onClick={() => applyThemeChange('dark')}
                     className={`relative z-10 py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-colors cursor-pointer ${
                       theme === 'dark'
                         ? 'text-white keep-white-text'
-                        : 'text-slate-300/80 hover:text-white'
+                        : 'text-ink-2 hover:text-ink'
                     }`}
                   >
                     <Moon className="w-3.5 h-3.5" />
@@ -4260,11 +4819,11 @@ export default function App() {
 
                   <button
                     type="button"
-                    onClick={() => setTheme('light')}
+                    onClick={() => applyThemeChange('light')}
                     className={`relative z-10 py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-colors cursor-pointer ${
                       theme === 'light'
                         ? 'text-white keep-white-text'
-                        : 'text-slate-300/80 hover:text-white'
+                        : 'text-ink-2 hover:text-ink'
                     }`}
                   >
                     <Sun className="w-3.5 h-3.5" />
@@ -4274,23 +4833,35 @@ export default function App() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-200 mb-1.5">
+                <label className="block text-xs font-semibold text-ink-2 mb-1.5">
                   Nome
                 </label>
                 <input
+                  ref={profileNameRef}
                   type="text"
-                  required
                   maxLength={120}
                   value={profileNameInput}
-                  onChange={(e) => setProfileNameInput(e.target.value)}
+                  onChange={(e) => {
+                    setProfileNameInput(e.target.value);
+                    if (profileNameError) setProfileNameError(null);
+                  }}
                   placeholder="Seu nome completo"
-                  className="w-full px-4 py-2.5 rounded-xl bg-[#070b14] border border-white/10 text-sm font-medium text-white focus:outline-none focus:border-[#3b82f6]"
+                  className={`w-full px-4 py-2.5 rounded-xl bg-inset border text-sm font-medium text-ink focus:outline-none ${
+                    profileNameError
+                      ? 'border-danger focus:border-danger'
+                      : 'border-line focus:border-brand-soft'
+                  }`}
                 />
+                {profileNameError && (
+                  <p className="text-xs font-medium text-danger mt-1">
+                    {profileNameError}
+                  </p>
+                )}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-200 mb-1.5">
+                  <label className="block text-xs font-semibold text-ink-2 mb-1.5">
                     Telefone
                   </label>
                   <input
@@ -4301,12 +4872,12 @@ export default function App() {
                       setProfilePhoneInput(formatPhoneValue(e.target.value))
                     }
                     placeholder="(00) 00000-0000"
-                    className="w-full px-4 py-2.5 rounded-xl bg-[#070b14] border border-white/10 text-sm font-medium text-white tabular-nums focus:outline-none focus:border-[#3b82f6]"
+                    className="w-full px-4 py-2.5 rounded-xl bg-inset border border-line text-sm font-medium text-ink tabular-nums focus:outline-none focus:border-brand-soft"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-200 mb-1.5">
+                  <label className="block text-xs font-semibold text-ink-2 mb-1.5">
                     Data de Nascimento
                   </label>
                   <input
@@ -4319,17 +4890,17 @@ export default function App() {
                       )
                     }
                     placeholder="DD/MM/AAAA"
-                    className="w-full px-4 py-2.5 rounded-xl bg-[#070b14] border border-white/10 text-sm font-medium text-white tabular-nums focus:outline-none focus:border-[#3b82f6]"
+                    className="w-full px-4 py-2.5 rounded-xl bg-inset border border-line text-sm font-medium text-ink tabular-nums focus:outline-none focus:border-brand-soft"
                   />
                 </div>
               </div>
 
               <div>
                 <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs font-semibold text-slate-400">
+                  <label className="text-xs font-semibold text-ink-muted">
                     CPF
                   </label>
-                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500">
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-ink-faint">
                     <Lock className="w-3 h-3" />
                     Não alterável
                   </span>
@@ -4343,16 +4914,16 @@ export default function App() {
                     userProgress?.cpf ||
                     'Não cadastrado'
                   }
-                  className="w-full px-4 py-2.5 rounded-xl bg-[#070b14]/60 border border-white/5 text-sm font-medium text-slate-400 tabular-nums cursor-not-allowed select-none"
+                  className="w-full px-4 py-2.5 rounded-xl bg-inset/60 border border-line-soft text-sm font-medium text-ink-muted tabular-nums cursor-not-allowed select-none"
                 />
               </div>
 
               <div>
                 <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs font-semibold text-slate-400">
+                  <label className="text-xs font-semibold text-ink-muted">
                     E-mail
                   </label>
-                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500">
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-ink-faint">
                     <Lock className="w-3 h-3" />
                     Não alterável
                   </span>
@@ -4362,7 +4933,7 @@ export default function App() {
                   readOnly
                   disabled
                   value={user.email || ''}
-                  className="w-full px-4 py-2.5 rounded-xl bg-[#070b14]/60 border border-white/5 text-sm font-medium text-slate-400 cursor-not-allowed select-none"
+                  className="w-full px-4 py-2.5 rounded-xl bg-inset/60 border border-line-soft text-sm font-medium text-ink-muted cursor-not-allowed select-none"
                 />
               </div>
 
@@ -4370,14 +4941,14 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setIsProfileModalOpen(false)}
-                  className="px-4 py-2.5 rounded-full bg-white/5 hover:bg-white/10 text-xs font-bold text-slate-300 transition-colors cursor-pointer"
+                  className="px-4 py-2.5 rounded-full bg-chip hover:bg-chip-hover text-xs font-bold text-ink-2 transition-colors cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={isSavingProfile}
-                  className="px-6 py-2.5 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold shadow-[0_6px_24px_rgba(37,99,235,0.45)] transition-all cursor-pointer disabled:opacity-50"
+                  className="px-6 py-2.5 rounded-full bg-brand hover:bg-brand-hover text-white text-xs font-bold shadow-glow-md transition-all cursor-pointer disabled:opacity-50"
                 >
                   {isSavingProfile ? 'Salvando...' : 'Salvar'}
                 </button>
@@ -4387,7 +4958,7 @@ export default function App() {
         </div>
       )}
 
-      {/* CALENDAR MODAL WINDOW (FULL SCREEN BORDERLESS, PRESENT MONTH, CIRCULAR ICONS & HIGHLIGHTER) */}
+      {/* CALENDAR MODAL WINDOW */}
       {isCalendarModalOpen && (
         <React.Suspense fallback={null}>
           <CalendarModal
@@ -4400,6 +4971,7 @@ export default function App() {
             userProgress={userProgress}
             onSaveEvent={handleSaveCalendarEvent}
             onDeleteEvent={requestDeleteCalendarEvent}
+            onVisibleYearChange={setCalendarVisibleYear}
           />
         </React.Suspense>
       )}
@@ -4431,17 +5003,17 @@ export default function App() {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-sm rounded-3xl bg-[#0d1527] border border-white/10 p-6 shadow-2xl space-y-5 text-center"
+            className="w-full max-w-sm rounded-3xl bg-surface border border-line p-6 shadow-pop space-y-5 text-center"
           >
-            <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center mx-auto">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-500 flex items-center justify-center mx-auto">
               <MessageCircle className="w-6 h-6" />
             </div>
 
             <div className="space-y-2">
-              <h3 className="text-lg font-extrabold tracking-tight text-white">
+              <h3 className="text-lg font-extrabold tracking-tight text-ink">
                 {lockedCoursePopup.title}
               </h3>
-              <p className="text-xs sm:text-sm text-slate-300/90 font-medium leading-relaxed">
+              <p className="text-xs sm:text-sm text-ink-2 font-medium leading-relaxed">
                 Mande um WhatsApp para adquirir o curso.
               </p>
             </div>
@@ -4463,7 +5035,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setLockedCoursePopup(null)}
-                className="w-full py-2.5 px-5 rounded-full bg-white/5 hover:bg-white/10 text-xs font-bold text-slate-300 transition-colors cursor-pointer"
+                className="w-full py-2.5 px-5 rounded-full bg-chip hover:bg-chip-hover text-xs font-bold text-ink-2 transition-colors cursor-pointer"
               >
                 Fechar
               </button>
@@ -4472,21 +5044,21 @@ export default function App() {
         </div>
       )}
 
-      {/* CONFIRMATION POPUP MODAL FOR DELETING USER, LESSON, PLAYLIST, COURSE OR SIMULADO */}
+      {/* CONFIRMATION POPUP MODAL FOR DELETING */}
       {pendingDelete && (
         <div className="fixed inset-0 z-[80] bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-sm rounded-3xl bg-[#0d1527] border border-white/10 p-6 shadow-2xl space-y-5 text-center">
-            <div className="w-12 h-12 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-400 flex items-center justify-center mx-auto">
+          <div className="w-full max-w-sm rounded-3xl bg-surface border border-line p-6 shadow-pop space-y-5 text-center">
+            <div className="w-12 h-12 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-500 flex items-center justify-center mx-auto">
               <Trash2 className="w-6 h-6" />
             </div>
 
             <div className="space-y-2">
-              <h3 className="text-lg font-extrabold tracking-tight text-white">
+              <h3 className="text-lg font-extrabold tracking-tight text-ink">
                 Tem certeza da exclusão?
               </h3>
-              <p className="text-xs sm:text-sm text-slate-300/90 font-medium leading-relaxed">
+              <p className="text-xs sm:text-sm text-ink-2 font-medium leading-relaxed">
                 Deseja realmente excluir {pendingDelete.articleAndType}{' '}
-                <span className="font-bold text-white">
+                <span className="font-bold text-ink">
                   &ldquo;{pendingDelete.title}&rdquo;
                 </span>
                 ? Essa ação não pode ser desfeita.
@@ -4498,7 +5070,7 @@ export default function App() {
                 type="button"
                 disabled={isDeletingItem}
                 onClick={() => setPendingDelete(null)}
-                className="flex-1 py-2.5 px-4 rounded-full bg-white/5 hover:bg-white/10 text-xs font-bold text-slate-200 transition-colors cursor-pointer disabled:opacity-50"
+                className="flex-1 py-2.5 px-4 rounded-full bg-chip hover:bg-chip-hover text-xs font-bold text-ink-2 transition-colors cursor-pointer disabled:opacity-50"
               >
                 Cancelar
               </button>

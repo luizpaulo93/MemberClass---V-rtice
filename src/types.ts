@@ -321,115 +321,26 @@ export function buildSubmissionDocId(simuladoId: string, userId: string): string
   return `sub_${s}_${u}`;
 }
 
-export function processAndResizeImageFile(
+export async function processAndResizeImageFile(
   file: File,
-  targetWidth: number,
-  targetHeight: number
+  targetWidth = 900,
+  targetHeight = 900,
+  quality = 0.85
 ): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const objectUrl = URL.createObjectURL(file);
-    const img = new Image();
-    img.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      reject(new Error('Formato de imagem inválido'));
-    };
-    img.onload = () => {
-      try {
-        const canvas = document.createElement('canvas');
-        canvas.width = targetWidth;
-        canvas.height = targetHeight;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          URL.revokeObjectURL(objectUrl);
-          reject(new Error('Canvas indisponível'));
-          return;
-        }
-
-        const scale = Math.max(targetWidth / img.width, targetHeight / img.height);
-        const scaledWidth = img.width * scale;
-        const scaledHeight = img.height * scale;
-        const dx = (targetWidth - scaledWidth) / 2;
-        const dy = (targetHeight - scaledHeight) / 2;
-
-        ctx.fillStyle = '#0b0a10';
-        ctx.fillRect(0, 0, targetWidth, targetHeight);
-        ctx.drawImage(img, dx, dy, scaledWidth, scaledHeight);
-
-        let quality = 0.82;
-        let dataUrl = canvas.toDataURL('image/jpeg', quality);
-        while (dataUrl.length > 350000 && quality > 0.45) {
-          quality -= 0.1;
-          dataUrl = canvas.toDataURL('image/jpeg', quality);
-        }
-        URL.revokeObjectURL(objectUrl);
-        resolve(dataUrl);
-      } catch (err) {
-        URL.revokeObjectURL(objectUrl);
-        reject(err);
-      }
-    };
-    img.src = objectUrl;
-  });
+  const { compressImageToDataUrl } = await import('./utils/imageCompress');
+  return compressImageToDataUrl(file, Math.max(targetWidth, targetHeight), quality);
 }
 
 /**
  * Preserves full aspect ratio (no cropping) for question photos and handwritten solution photos,
  * compressing to fit cleanly inside Firestore document limits while keeping math/text sharp.
  */
-export function processDoubtPhotoFile(
+export async function processDoubtPhotoFile(
   file: File,
-  maxDimension = 1280
+  maxDimension = 1400
 ): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const objectUrl = URL.createObjectURL(file);
-    const img = new Image();
-    img.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      reject(new Error('Formato de imagem inválido'));
-    };
-    img.onload = () => {
-      try {
-        let width = img.width;
-        let height = img.height;
-        if (width > maxDimension || height > maxDimension) {
-          if (width >= height) {
-            height = Math.max(1, Math.round((height * maxDimension) / width));
-            width = maxDimension;
-          } else {
-            width = Math.max(1, Math.round((width * maxDimension) / height));
-            height = maxDimension;
-          }
-        }
-
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          URL.revokeObjectURL(objectUrl);
-          reject(new Error('Canvas indisponível'));
-          return;
-        }
-
-        ctx.fillStyle = '#0b0a10';
-        ctx.fillRect(0, 0, width, height);
-        ctx.drawImage(img, 0, 0, width, height);
-
-        let quality = 0.82;
-        let dataUrl = canvas.toDataURL('image/jpeg', quality);
-        while (dataUrl.length > 680000 && quality > 0.45) {
-          quality -= 0.1;
-          dataUrl = canvas.toDataURL('image/jpeg', quality);
-        }
-        URL.revokeObjectURL(objectUrl);
-        resolve(dataUrl);
-      } catch (err) {
-        URL.revokeObjectURL(objectUrl);
-        reject(err);
-      }
-    };
-    img.src = objectUrl;
-  });
+  const { compressImageToDataUrl } = await import('./utils/imageCompress');
+  return compressImageToDataUrl(file, maxDimension, 0.85);
 }
 
 export function hasLessonVideo(youtubeId?: string | null): boolean {

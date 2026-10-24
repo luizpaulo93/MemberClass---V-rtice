@@ -1,10 +1,11 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Camera,
   CheckCircle2,
   Heart,
   ImagePlus,
+  Lock,
   MessageCircle,
   Send,
   Trash2,
@@ -14,9 +15,9 @@ import {
 import {
   Doubt,
   DoubtReply,
-  processDoubtPhotoFile,
   sanitizeString,
 } from '../types';
+import { compressImageToDataUrl } from '../utils/imageCompress';
 
 interface DuvidasWindowProps {
   doubts: Doubt[];
@@ -25,6 +26,7 @@ interface DuvidasWindowProps {
   currentUserName: string;
   currentUserPhotoUrl: string;
   isAdmin: boolean;
+  isBlockedUser?: boolean;
   onCreateDoubt: (text: string, imageUrl: string) => Promise<void>;
   onToggleLikeDoubt: (doubt: Doubt) => Promise<void>;
   onToggleResolveDoubt: (doubt: Doubt) => Promise<void>;
@@ -53,6 +55,190 @@ function formatRelativeDate(ms: number): string {
   });
 }
 
+interface DoubtFeedItemProps {
+  doubt: Doubt;
+  replyCount: number;
+  isLiked: boolean;
+  likeCount: number;
+  canManage: boolean;
+  onSelect: (doubtId: string) => void;
+  onToggleLike: (doubt: Doubt) => void;
+  onToggleResolve: (doubt: Doubt) => void;
+  onDelete: (doubtId: string) => void;
+  onZoomImage: (imageUrl: string) => void;
+}
+
+const DoubtFeedItem: React.FC<DoubtFeedItemProps> = memo(
+  ({
+    doubt,
+    replyCount,
+    isLiked,
+    likeCount,
+    canManage,
+    onSelect,
+    onToggleLike,
+    onToggleResolve,
+    onDelete,
+    onZoomImage,
+  }) => {
+    const [imgLoaded, setImgLoaded] = useState(false);
+
+    return (
+      <article
+        onClick={() => onSelect(doubt.id)}
+        className="cv-auto-row py-5 space-y-3.5 hover:bg-surface-2/40 transition-colors cursor-pointer px-2 rounded-2xl"
+      >
+        {/* Author Row + Like & Delete */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            {doubt.authorPhotoUrl ? (
+              <img
+                src={doubt.authorPhotoUrl}
+                alt={doubt.authorName}
+                referrerPolicy="no-referrer"
+                loading="lazy"
+                decoding="async"
+                className="w-9 h-9 rounded-full object-cover border border-line-strong shrink-0"
+              />
+            ) : (
+              <div className="w-9 h-9 rounded-full bg-brand/20 border border-brand-soft/40 text-brand-soft flex items-center justify-center text-xs font-extrabold shrink-0">
+                {(doubt.authorName || 'A')[0].toUpperCase()}
+              </div>
+            )}
+
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-xs sm:text-sm font-extrabold text-ink truncate">
+                  {doubt.authorName}
+                </h3>
+                <span className="text-xs text-ink-faint">•</span>
+                <span className="text-xs text-ink-muted font-medium">
+                  {formatRelativeDate(doubt.createdAtMs)}
+                </span>
+                {doubt.isResolved && (
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 [html.theme-light_&]:text-emerald-700 text-[10px] font-bold inline-flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3" />
+                    Dúvida Sanada
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {canManage && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(doubt.id);
+              }}
+              className="min-w-10 min-h-10 p-2 rounded-full text-ink-muted hover:text-rose-400 hover:bg-rose-500/10 flex items-center justify-center transition-colors cursor-pointer shrink-0"
+              title="Excluir dúvida"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+
+        {/* Full Doubt Text & Photo */}
+        {doubt.text && (
+          <p className="text-sm text-ink font-medium leading-relaxed whitespace-pre-line">
+            {doubt.text}
+          </p>
+        )}
+
+        {doubt.imageUrl && (
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+              onZoomImage(doubt.imageUrl);
+            }}
+            className="group relative rounded-2xl overflow-hidden bg-inset border border-line max-h-[420px] flex items-center justify-center cursor-zoom-in"
+          >
+            <img
+              src={doubt.imageUrl}
+              alt="Foto da dúvida"
+              loading="lazy"
+              decoding="async"
+              onLoad={() => setImgLoaded(true)}
+              className={`max-h-[420px] w-auto object-contain transition-opacity duration-200 ${
+                imgLoaded ? 'opacity-100' : 'opacity-0'
+              }`}
+            />
+            <div className="absolute bottom-2.5 right-2.5 px-2.5 py-1 rounded-full bg-black/75 border border-white/15 text-[11px] font-semibold text-white inline-flex items-center gap-1.5 opacity-90 group-hover:opacity-100 transition-opacity">
+              <ZoomIn className="w-3.5 h-3.5 text-blue-300" />
+              <span>Ampliar</span>
+            </div>
+          </div>
+        )}
+
+        {/* Social Action Row: Like + Collapsed Comments Indicator + Sanada Toggle */}
+        <div className="flex items-center justify-between gap-3 pt-1">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleLike(doubt);
+              }}
+              className={`h-8 px-3 rounded-full border text-xs font-bold inline-flex items-center gap-1.5 transition-all cursor-pointer tabular-nums ${
+                isLiked
+                  ? 'bg-rose-500/20 border-rose-500/40 text-rose-400 [html.theme-light_&]:text-rose-600'
+                  : 'bg-chip hover:bg-chip-hover border-line text-ink-2 hover:text-ink'
+              }`}
+            >
+              <Heart
+                className={`w-3.5 h-3.5 ${
+                  isLiked ? 'fill-current text-rose-400' : ''
+                }`}
+              />
+              <span>{likeCount}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelect(doubt.id);
+              }}
+              className="h-8 px-3.5 rounded-full bg-chip hover:bg-chip-hover border-line border text-xs font-bold text-ink-2 hover:text-ink inline-flex items-center gap-1.5 transition-colors cursor-pointer tabular-nums"
+            >
+              <MessageCircle className="w-3.5 h-3.5 text-brand-soft" />
+              <span>
+                {replyCount === 0
+                  ? 'Comentar'
+                  : `${replyCount} comentário${replyCount > 1 ? 's' : ''}`}
+              </span>
+            </button>
+          </div>
+
+          {canManage && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleResolve(doubt);
+              }}
+              className={`px-3 py-1.5 rounded-full text-[11px] font-bold inline-flex items-center gap-1.5 border transition-all cursor-pointer ${
+                doubt.isResolved
+                  ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400 [html.theme-light_&]:text-emerald-700'
+                  : 'bg-chip hover:bg-emerald-500/15 border-line text-ink-2 hover:text-emerald-400'
+              }`}
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>
+                {doubt.isResolved ? 'Dúvida Sanada' : 'Marcar como Sanada'}
+              </span>
+            </button>
+          )}
+        </div>
+      </article>
+    );
+  }
+);
+
+DoubtFeedItem.displayName = 'DoubtFeedItem';
+
 export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
   doubts,
   replies,
@@ -60,6 +246,7 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
   currentUserName,
   currentUserPhotoUrl,
   isAdmin,
+  isBlockedUser = false,
   onCreateDoubt,
   onToggleLikeDoubt,
   onToggleResolveDoubt,
@@ -128,6 +315,32 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
     [doubts, selectedDoubtId]
   );
 
+  const handleSelectDoubt = useCallback((doubtId: string) => {
+    setSelectedDoubtId(doubtId);
+  }, []);
+
+  const handleZoomImage = useCallback((imageUrl: string) => {
+    setZoomedImageUrl(imageUrl);
+  }, []);
+
+  if (!isAdmin && isBlockedUser) {
+    return (
+      <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 py-12 text-center">
+        <div className="p-8 md:p-12 rounded-3xl bg-surface border border-line shadow-card max-w-lg mx-auto space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto">
+            <Lock className="w-8 h-8" />
+          </div>
+          <h2 className="text-lg md:text-xl font-bold text-ink">
+            A aba Dúvidas é exclusiva para alunos
+          </h2>
+          <p className="text-xs md:text-sm text-ink-muted leading-relaxed">
+            Tire dúvidas diretamente com os professores e monitores com suporte a envio de fotos e comentários.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   const handleSelectNewDoubtPhoto = async (
     e: React.ChangeEvent<HTMLInputElement>
   ) => {
@@ -135,7 +348,7 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
     if (!file) return;
     setIsUploadingNewPhoto(true);
     try {
-      const dataUrl = await processDoubtPhotoFile(file, 1280);
+      const dataUrl = await compressImageToDataUrl(file, 1400);
       setNewImageUrl(dataUrl);
     } catch (err) {
       console.error('Erro ao processar foto da dúvida:', err);
@@ -169,7 +382,7 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
     if (!file) return;
     setUploadingReplyForId(doubtId);
     try {
-      const dataUrl = await processDoubtPhotoFile(file, 1280);
+      const dataUrl = await compressImageToDataUrl(file, 1400);
       setReplyImages((prev) => ({ ...prev, [doubtId]: dataUrl }));
     } catch (err) {
       console.error('Erro ao processar foto da resposta:', err);
@@ -222,13 +435,13 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
           return (
             <div className="space-y-5">
               {/* Top Navigation Bar */}
-              <div className="flex items-center justify-between gap-3 pb-3.5 border-b border-white/10">
+              <div className="flex items-center justify-between gap-3 pb-3.5 border-b border-line">
                 <button
                   type="button"
                   onClick={() => setSelectedDoubtId(null)}
-                  className="inline-flex items-center gap-2 text-xs sm:text-sm font-bold text-slate-200 hover:text-white transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-2 text-xs sm:text-sm font-bold text-ink-2 hover:text-ink transition-colors cursor-pointer"
                 >
-                  <ArrowLeft className="w-4 h-4 text-[#3b82f6]" />
+                  <ArrowLeft className="w-4 h-4 text-brand-soft" />
                   <span>Voltar para Dúvidas</span>
                 </button>
 
@@ -239,7 +452,7 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
                       onDeleteDoubt(activeDoubt.id);
                       setSelectedDoubtId(null);
                     }}
-                    className="p-2 rounded-full text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                    className="min-w-10 min-h-10 p-2 rounded-full text-ink-muted hover:text-rose-400 hover:bg-rose-500/10 flex items-center justify-center transition-colors cursor-pointer"
                     title="Excluir dúvida"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -248,7 +461,7 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
               </div>
 
               {/* Full Doubt Post (Social-network style, unboxed) */}
-              <article className="space-y-4 pb-5 border-b border-white/10">
+              <article className="space-y-4 pb-5 border-b border-line">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3 min-w-0">
                     {activeDoubt.authorPhotoUrl ? (
@@ -256,27 +469,29 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
                         src={activeDoubt.authorPhotoUrl}
                         alt={activeDoubt.authorName}
                         referrerPolicy="no-referrer"
-                        className="w-10 h-10 rounded-full object-cover border border-white/15 shrink-0"
+                        loading="lazy"
+                        decoding="async"
+                        className="w-10 h-10 rounded-full object-cover border border-line-strong shrink-0"
                       />
                     ) : (
-                      <div className="w-10 h-10 rounded-full bg-[#2563eb]/30 border border-[#3b82f6]/40 text-blue-200 flex items-center justify-center text-xs font-extrabold shrink-0">
+                      <div className="w-10 h-10 rounded-full bg-brand/20 border border-brand-soft/40 text-brand-soft flex items-center justify-center text-xs font-extrabold shrink-0">
                         {(activeDoubt.authorName || 'A')[0].toUpperCase()}
                       </div>
                     )}
 
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <h2 className="text-sm font-extrabold text-white truncate">
+                        <h2 className="text-sm font-extrabold text-ink truncate">
                           {activeDoubt.authorName}
                         </h2>
                         {activeDoubt.isResolved && (
-                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold inline-flex items-center gap-1">
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 [html.theme-light_&]:text-emerald-700 text-[10px] font-bold inline-flex items-center gap-1">
                             <CheckCircle2 className="w-3 h-3" />
                             Dúvida Sanada
                           </span>
                         )}
                       </div>
-                      <p className="text-[11px] text-slate-400 font-medium">
+                      <p className="text-xs text-ink-muted font-medium">
                         {formatRelativeDate(activeDoubt.createdAtMs)}
                       </p>
                     </div>
@@ -288,8 +503,8 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
                       onClick={() => onToggleLikeDoubt(activeDoubt)}
                       className={`h-8 px-3 rounded-full border text-xs font-bold inline-flex items-center gap-1.5 transition-all cursor-pointer tabular-nums ${
                         isLiked
-                          ? 'bg-rose-500/20 border-rose-500/40 text-rose-300'
-                          : 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300 hover:text-white'
+                          ? 'bg-rose-500/20 border-rose-500/40 text-rose-400 [html.theme-light_&]:text-rose-600'
+                          : 'bg-chip hover:bg-chip-hover border-line text-ink-2 hover:text-ink'
                       }`}
                     >
                       <Heart
@@ -303,7 +518,7 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
                 </div>
 
                 {activeDoubt.text && (
-                  <p className="text-sm sm:text-[15px] text-slate-100 font-medium leading-relaxed whitespace-pre-line">
+                  <p className="text-sm sm:text-[15px] text-ink font-medium leading-relaxed whitespace-pre-line">
                     {activeDoubt.text}
                   </p>
                 )}
@@ -311,14 +526,16 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
                 {activeDoubt.imageUrl && (
                   <div
                     onClick={() => setZoomedImageUrl(activeDoubt.imageUrl)}
-                    className="group relative rounded-2xl overflow-hidden bg-[#070b14] border border-white/10 max-h-[480px] flex items-center justify-center cursor-zoom-in"
+                    className="group relative rounded-2xl overflow-hidden bg-inset border border-line max-h-[480px] flex items-center justify-center cursor-zoom-in"
                   >
                     <img
                       src={activeDoubt.imageUrl}
                       alt="Foto da dúvida"
+                      loading="lazy"
+                      decoding="async"
                       className="max-h-[480px] w-auto object-contain"
                     />
-                    <div className="absolute bottom-2.5 right-2.5 px-2.5 py-1 rounded-full bg-black/75 border border-white/15 text-[11px] font-semibold text-slate-200 inline-flex items-center gap-1.5 opacity-90 group-hover:opacity-100 transition-opacity">
+                    <div className="absolute bottom-2.5 right-2.5 px-2.5 py-1 rounded-full bg-black/75 border border-white/15 text-[11px] font-semibold text-white inline-flex items-center gap-1.5 opacity-90 group-hover:opacity-100 transition-opacity">
                       <ZoomIn className="w-3.5 h-3.5 text-blue-300" />
                       <span>Ampliar</span>
                     </div>
@@ -332,8 +549,8 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
                       onClick={() => onToggleResolveDoubt(activeDoubt)}
                       className={`px-3.5 py-1.5 rounded-full text-xs font-bold inline-flex items-center gap-1.5 border transition-all cursor-pointer ${
                         activeDoubt.isResolved
-                          ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30'
-                          : 'bg-white/5 hover:bg-emerald-500/15 border-white/10 hover:border-emerald-500/35 text-slate-300 hover:text-emerald-300'
+                          ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400 [html.theme-light_&]:text-emerald-700 hover:bg-emerald-500/30'
+                          : 'bg-chip hover:bg-emerald-500/15 border-line hover:border-emerald-500/35 text-ink-2 hover:text-emerald-400'
                       }`}
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" />
@@ -349,11 +566,12 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
 
               {/* Reply Composer inside Dedicated Doubt Window */}
               <form
+                noValidate
                 onSubmit={(e) => handlePublishReply(activeDoubt.id, e)}
                 className="space-y-2.5"
               >
                 {draftReplyImg && (
-                  <div className="relative rounded-xl overflow-hidden bg-[#070b14] border border-white/10 max-h-56 flex items-center justify-center">
+                  <div className="relative rounded-xl overflow-hidden bg-inset border border-line max-h-56 flex items-center justify-center">
                     <img
                       src={draftReplyImg}
                       alt="Prévia da resposta"
@@ -393,10 +611,10 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
                     onClick={() =>
                       replyFileInputRefs.current[activeDoubt.id]?.click()
                     }
-                    className="h-10 px-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-bold text-slate-200 inline-flex items-center gap-1.5 shrink-0 transition-colors cursor-pointer disabled:opacity-50"
+                    className="h-10 px-3 rounded-xl bg-chip hover:bg-chip-hover border border-line text-xs font-bold text-ink-2 inline-flex items-center gap-1.5 shrink-0 transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap"
                     title="Enviar foto com a resolução"
                   >
-                    <ImagePlus className="w-4 h-4 text-[#60a5fa]" />
+                    <ImagePlus className="w-4 h-4 text-brand-soft" />
                     <span className="hidden sm:inline">
                       {isUploadingThisReply ? 'Foto...' : 'Foto'}
                     </span>
@@ -413,7 +631,7 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
                       }))
                     }
                     placeholder="Escreva um comentário ou envie foto da resolução..."
-                    className="flex-1 min-w-0 h-10 px-3.5 rounded-xl bg-[#0d1527] border border-white/10 text-xs sm:text-sm font-medium text-white placeholder:text-slate-500 focus:outline-none focus:border-[#3b82f6]"
+                    className="flex-1 min-w-0 h-10 px-3.5 rounded-xl bg-surface border border-line text-xs sm:text-sm font-medium text-ink placeholder:text-ink-faint focus:outline-none focus:border-brand-soft"
                   />
 
                   <button
@@ -423,7 +641,7 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
                       isSubmittingThisReply ||
                       isUploadingThisReply
                     }
-                    className="h-10 px-4 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold inline-flex items-center gap-1.5 shrink-0 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="h-10 px-4 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold inline-flex items-center gap-1.5 shrink-0 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
                   >
                     <Send className="w-3.5 h-3.5" />
                     <span className="hidden sm:inline">Responder</span>
@@ -433,12 +651,12 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
 
               {/* Comments List in Clean, Space-Efficient Rectangles */}
               <div className="space-y-2.5 pt-1">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-ink-muted">
                   Comentários ({cardReplies.length})
                 </h3>
 
                 {cardReplies.length === 0 ? (
-                  <p className="text-xs text-slate-400 py-6 text-center">
+                  <p className="text-xs text-ink-muted py-6 text-center">
                     Nenhum comentário ainda. Seja o primeiro a ajudar acima!
                   </p>
                 ) : (
@@ -449,7 +667,7 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
                       return (
                         <div
                           key={reply.id}
-                          className="p-3 sm:p-3.5 rounded-2xl bg-[#141220] border border-white/10 space-y-2"
+                          className="p-3 sm:p-3.5 rounded-2xl bg-surface border border-line shadow-card space-y-2"
                         >
                           <div className="flex items-center justify-between gap-2">
                             <div className="flex items-center gap-2 min-w-0">
@@ -458,20 +676,22 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
                                   src={reply.authorPhotoUrl}
                                   alt={reply.authorName}
                                   referrerPolicy="no-referrer"
-                                  className="w-6 h-6 rounded-full object-cover border border-white/15 shrink-0"
+                                  loading="lazy"
+                                  decoding="async"
+                                  className="w-6 h-6 rounded-full object-cover border border-line-strong shrink-0"
                                 />
                               ) : (
-                                <div className="w-6 h-6 rounded-full bg-[#2563eb]/30 text-blue-200 flex items-center justify-center text-[10px] font-bold shrink-0">
+                                <div className="w-6 h-6 rounded-full bg-brand/20 text-brand-soft flex items-center justify-center text-[10px] font-bold shrink-0">
                                   {(reply.authorName || 'A')[0].toUpperCase()}
                                 </div>
                               )}
-                              <span className="text-xs font-bold text-white truncate">
+                              <span className="text-xs font-bold text-ink truncate">
                                 {reply.authorName}
                               </span>
-                              <span className="text-[11px] text-slate-500">
+                              <span className="text-[11px] text-ink-faint">
                                 •
                               </span>
-                              <span className="text-[11px] text-slate-400 font-medium shrink-0">
+                              <span className="text-xs text-ink-muted font-medium shrink-0">
                                 {formatRelativeDate(reply.createdAtMs)}
                               </span>
                             </div>
@@ -480,7 +700,7 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
                               <button
                                 type="button"
                                 onClick={() => onDeleteReply(reply.id)}
-                                className="p-1 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer shrink-0"
+                                className="min-w-9 min-h-9 p-2 rounded-lg text-ink-muted hover:text-rose-400 hover:bg-rose-500/10 flex items-center justify-center transition-colors cursor-pointer shrink-0"
                                 title="Excluir comentário"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
@@ -489,7 +709,7 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
                           </div>
 
                           {reply.text && (
-                            <p className="text-xs sm:text-sm text-slate-200 font-medium leading-relaxed whitespace-pre-line">
+                            <p className="text-xs sm:text-sm text-ink-2 font-medium leading-relaxed whitespace-pre-line">
                               {reply.text}
                             </p>
                           )}
@@ -497,14 +717,16 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
                           {reply.imageUrl && (
                             <div
                               onClick={() => setZoomedImageUrl(reply.imageUrl)}
-                              className="group relative rounded-xl overflow-hidden bg-[#070b14] border border-white/10 max-h-72 flex items-center justify-center cursor-zoom-in"
+                              className="group relative rounded-xl overflow-hidden bg-inset border border-line max-h-72 flex items-center justify-center cursor-zoom-in"
                             >
                               <img
                                 src={reply.imageUrl}
                                 alt="Foto da resolução"
+                                loading="lazy"
+                                decoding="async"
                                 className="max-h-72 w-auto object-contain"
                               />
-                              <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded-full bg-black/75 border border-white/15 text-[10px] font-semibold text-slate-200 inline-flex items-center gap-1">
+                              <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded-full bg-black/75 border border-white/15 text-[10px] font-semibold text-white inline-flex items-center gap-1">
                                 <ZoomIn className="w-3 h-3 text-blue-300" />
                                 <span>Ampliar</span>
                               </div>
@@ -522,17 +744,18 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
       ) : (
         /* MAIN SOCIAL FEED OF DOUBTS (UNBOXED WITH CLEAN SEPARATORS) */
         <div>
-          {/* Header (Subtitle removed as requested) */}
+          {/* Header */}
           <div className="pb-4">
-            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
+            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-ink">
               Comunidade de Dúvidas
             </h1>
           </div>
 
           {/* Unboxed Social Composer separated by bottom divider */}
           <form
+            noValidate
             onSubmit={handlePublishDoubt}
-            className="pb-5 border-b border-white/10 space-y-3"
+            className="pb-5 border-b border-line space-y-3"
           >
             <div className="flex items-start gap-3">
               {currentUserPhotoUrl ? (
@@ -540,10 +763,12 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
                   src={currentUserPhotoUrl}
                   alt={currentUserName}
                   referrerPolicy="no-referrer"
-                  className="w-10 h-10 rounded-full object-cover border border-white/15 shrink-0 mt-0.5"
+                  loading="lazy"
+                  decoding="async"
+                  className="w-10 h-10 rounded-full object-cover border border-line-strong shrink-0 mt-0.5"
                 />
               ) : (
-                <div className="w-10 h-10 rounded-full bg-[#2563eb] text-white flex items-center justify-center text-sm font-extrabold shrink-0 mt-0.5">
+                <div className="w-10 h-10 rounded-full bg-brand text-white flex items-center justify-center text-sm font-extrabold shrink-0 mt-0.5">
                   {(currentUserName || 'A')[0].toUpperCase()}
                 </div>
               )}
@@ -555,13 +780,13 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
                   value={newText}
                   onChange={(e) => setNewText(e.target.value)}
                   placeholder="Qual é a sua dúvida? Escreva aqui ou anexe uma foto da questão..."
-                  className="w-full rounded-2xl bg-[#0d1527] border border-white/10 px-4 py-3 text-sm font-medium text-white placeholder:text-slate-500 focus:outline-none focus:border-[#3b82f6] resize-none"
+                  className="w-full rounded-2xl bg-surface border border-line px-4 py-3 text-sm font-medium text-ink placeholder:text-ink-faint focus:outline-none focus:border-brand-soft resize-none shadow-card"
                 />
               </div>
             </div>
 
             {newImageUrl && (
-              <div className="relative rounded-2xl overflow-hidden bg-[#070b14] border border-white/10 max-h-80 flex items-center justify-center">
+              <div className="relative rounded-2xl overflow-hidden bg-inset border border-line max-h-80 flex items-center justify-center">
                 <img
                   src={newImageUrl}
                   alt="Prévia da dúvida"
@@ -591,9 +816,9 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
                 type="button"
                 disabled={isUploadingNewPhoto}
                 onClick={() => newPhotoInputRef.current?.click()}
-                className="px-3.5 py-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-bold text-slate-200 inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+                className="px-3.5 py-2 rounded-full bg-chip hover:bg-chip-hover border border-line text-xs font-bold text-ink-2 inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
               >
-                <Camera className="w-4 h-4 text-[#60a5fa] shrink-0" />
+                <Camera className="w-4 h-4 text-brand-soft shrink-0" />
                 <span>
                   {isUploadingNewPhoto
                     ? 'Carregando...'
@@ -610,7 +835,7 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
                   isSubmittingDoubt ||
                   isUploadingNewPhoto
                 }
-                className="px-5 py-2 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold shadow-[0_4px_18px_rgba(37,99,235,0.4)] inline-flex items-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-5 py-2 rounded-full bg-brand hover:bg-brand-hover text-white text-xs font-bold shadow-glow-sm inline-flex items-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Send className="w-3.5 h-3.5 shrink-0" />
                 <span>
@@ -623,16 +848,16 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
           {/* Social Feed List with Horizontal Dividers Between Doubts */}
           {orderedDoubts.length === 0 ? (
             <div className="py-16 px-4 text-center space-y-2">
-              <MessageCircle className="w-8 h-8 text-[#3b82f6] mx-auto opacity-80" />
-              <p className="text-sm font-bold text-white">
+              <MessageCircle className="w-8 h-8 text-brand-soft mx-auto opacity-80" />
+              <p className="text-sm font-bold text-ink">
                 Nenhuma dúvida publicada ainda
               </p>
-              <p className="text-xs text-slate-400 font-medium">
+              <p className="text-xs text-ink-muted font-medium">
                 Seja o primeiro a mandar uma foto ou pergunta acima!
               </p>
             </div>
           ) : (
-            <div className="divide-y divide-white/10">
+            <div className="divide-y divide-line">
               {orderedDoubts.map((doubt) => {
                 const cardReplies = repliesByDoubtId[doubt.id] || [];
                 const isLiked = (doubt.likedBy || []).includes(currentUserUid);
@@ -641,151 +866,19 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
                 const canManage = isOwner || isAdmin;
 
                 return (
-                  <article
+                  <DoubtFeedItem
                     key={doubt.id}
-                    onClick={() => setSelectedDoubtId(doubt.id)}
-                    className="py-5 space-y-3.5 hover:bg-white/[0.015] transition-colors cursor-pointer"
-                  >
-                    {/* Author Row + Like & Delete */}
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        {doubt.authorPhotoUrl ? (
-                          <img
-                            src={doubt.authorPhotoUrl}
-                            alt={doubt.authorName}
-                            referrerPolicy="no-referrer"
-                            className="w-9 h-9 rounded-full object-cover border border-white/15 shrink-0"
-                          />
-                        ) : (
-                          <div className="w-9 h-9 rounded-full bg-[#2563eb]/30 border border-[#3b82f6]/40 text-blue-200 flex items-center justify-center text-xs font-extrabold shrink-0">
-                            {(doubt.authorName || 'A')[0].toUpperCase()}
-                          </div>
-                        )}
-
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <h3 className="text-xs sm:text-sm font-extrabold text-white truncate">
-                              {doubt.authorName}
-                            </h3>
-                            <span className="text-[11px] text-slate-500">•</span>
-                            <span className="text-[11px] text-slate-400 font-medium">
-                              {formatRelativeDate(doubt.createdAtMs)}
-                            </span>
-                            {doubt.isResolved && (
-                              <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold inline-flex items-center gap-1">
-                                <CheckCircle2 className="w-3 h-3" />
-                                Dúvida Sanada
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      {canManage && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onDeleteDoubt(doubt.id);
-                          }}
-                          className="p-1.5 rounded-full text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer shrink-0"
-                          title="Excluir dúvida"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-
-                    {/* Full Doubt Text & Photo */}
-                    {doubt.text && (
-                      <p className="text-sm text-slate-100 font-medium leading-relaxed whitespace-pre-line">
-                        {doubt.text}
-                      </p>
-                    )}
-
-                    {doubt.imageUrl && (
-                      <div
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setZoomedImageUrl(doubt.imageUrl);
-                        }}
-                        className="group relative rounded-2xl overflow-hidden bg-[#070b14] border border-white/10 max-h-[420px] flex items-center justify-center cursor-zoom-in"
-                      >
-                        <img
-                          src={doubt.imageUrl}
-                          alt="Foto da dúvida"
-                          className="max-h-[420px] w-auto object-contain"
-                        />
-                        <div className="absolute bottom-2.5 right-2.5 px-2.5 py-1 rounded-full bg-black/75 border border-white/15 text-[11px] font-semibold text-slate-200 inline-flex items-center gap-1.5 opacity-90 group-hover:opacity-100 transition-opacity">
-                          <ZoomIn className="w-3.5 h-3.5 text-blue-300" />
-                          <span>Ampliar</span>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Social Action Row: Like + Collapsed Comments Indicator + Sanada Toggle */}
-                    <div className="flex items-center justify-between gap-3 pt-1">
-                      <div className="flex items-center gap-3">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onToggleLikeDoubt(doubt);
-                          }}
-                          className={`h-8 px-3 rounded-full border text-xs font-bold inline-flex items-center gap-1.5 transition-all cursor-pointer tabular-nums ${
-                            isLiked
-                              ? 'bg-rose-500/20 border-rose-500/40 text-rose-300'
-                              : 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300 hover:text-white'
-                          }`}
-                        >
-                          <Heart
-                            className={`w-3.5 h-3.5 ${
-                              isLiked ? 'fill-current text-rose-400' : ''
-                            }`}
-                          />
-                          <span>{likeCount}</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedDoubtId(doubt.id);
-                          }}
-                          className="h-8 px-3.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-bold text-slate-300 hover:text-white inline-flex items-center gap-1.5 transition-colors cursor-pointer tabular-nums"
-                        >
-                          <MessageCircle className="w-3.5 h-3.5 text-[#60a5fa]" />
-                          <span>
-                            {cardReplies.length === 0
-                              ? 'Comentar'
-                              : `${cardReplies.length} comentário${cardReplies.length > 1 ? 's' : ''}`}
-                          </span>
-                        </button>
-                      </div>
-
-                      {canManage && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onToggleResolveDoubt(doubt);
-                          }}
-                          className={`px-3 py-1.5 rounded-full text-[11px] font-bold inline-flex items-center gap-1.5 border transition-all cursor-pointer ${
-                            doubt.isResolved
-                              ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
-                              : 'bg-white/5 hover:bg-emerald-500/15 border-white/10 text-slate-300 hover:text-emerald-300'
-                          }`}
-                        >
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>
-                            {doubt.isResolved
-                              ? 'Dúvida Sanada'
-                              : 'Marcar como Sanada'}
-                          </span>
-                        </button>
-                      )}
-                    </div>
-                  </article>
+                    doubt={doubt}
+                    replyCount={cardReplies.length}
+                    isLiked={isLiked}
+                    likeCount={likeCount}
+                    canManage={canManage}
+                    onSelect={handleSelectDoubt}
+                    onToggleLike={onToggleLikeDoubt}
+                    onToggleResolve={onToggleResolveDoubt}
+                    onDelete={onDeleteDoubt}
+                    onZoomImage={handleZoomImage}
+                  />
                 );
               })}
             </div>
@@ -797,7 +890,7 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
       {zoomedImageUrl && (
         <div
           onClick={() => setZoomedImageUrl(null)}
-          className="stealth-player-dark fixed inset-0 z-[90] bg-black/90 backdrop-blur-md flex items-center justify-center p-4 cursor-zoom-out"
+          className="stealth-player-dark fixed inset-0 z-[90] bg-black/90 backdrop-blur-sm flex items-center justify-center p-4 cursor-zoom-out"
         >
           <button
             type="button"
@@ -811,11 +904,10 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
             src={zoomedImageUrl}
             alt="Visualização ampliada"
             onClick={(e) => e.stopPropagation()}
-            className="max-w-full max-h-[90vh] object-contain rounded-2xl shadow-2xl cursor-default"
+            className="max-w-full max-h-[90dvh] object-contain rounded-2xl shadow-2xl cursor-default"
           />
         </div>
       )}
     </section>
   );
 };
-

@@ -98,22 +98,10 @@ export function handleFirestoreError(
     return;
   }
 
-  const errInfo: FirestoreErrorInfo = {
-    error: message,
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo:
-        auth.currentUser?.providerData?.map((provider) => ({
-          providerId: provider.providerId,
-          email: provider.email,
-        })) || [],
-    },
+  const logPayload = {
+    code: code || 'unknown',
     operationType,
-    path,
+    path: path || 'unknown',
   };
-  console.warn('Firestore Notice: ', JSON.stringify(errInfo));
+  console.warn('Firestore Notice:', JSON.stringify(logPayload));
 }

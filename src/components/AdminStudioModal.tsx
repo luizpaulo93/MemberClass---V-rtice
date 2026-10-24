@@ -20,7 +20,20 @@ import {
   ChevronRight,
   Search,
   Calendar as CalendarIcon,
+  Compass,
+  ShieldCheck,
+  Database,
+  KeyRound,
+  Image as ImageIcon,
 } from 'lucide-react';
+import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { db } from '../firebase';
+import { updatePdfChunksIsFree } from '../utils/pdfStorage';
+import {
+  compressImageToDataUrl,
+  recompressDataUrlImage,
+} from '../utils/imageCompress';
+import { AdminMentoriaTab } from './AdminMentoriaTab';
 import {
   Course,
   Playlist,
@@ -31,7 +44,6 @@ import {
   PlatformConfig,
   Simulado,
   SimuladoSubmission,
-  ENEM_AREA_LABELS,
   SCHEMA_LIMITS,
   IMAGE_DIMENSIONS,
   sanitizeString,
@@ -39,12 +51,10 @@ import {
   formatBirthDateDisplay,
   generateSafeId,
   emailToStudentDocId,
-  processAndResizeImageFile,
   FREE_COURSE_ID,
   FREE_PLAYLIST_ID,
 } from '../types';
 import { CoverArtwork } from './CoverArtwork';
-import { SimuladoEditorWindow } from './SimuladoEditorWindow';
 
 export { FREE_COURSE_ID, FREE_PLAYLIST_ID };
 const UNASSIGNED_FOLDER_ID = '__UNASSIGNED__';
@@ -110,6 +120,7 @@ type AdminTab =
   | 'simulados'
   | 'turmas'
   | 'students'
+  | 'mentoria'
   | 'config';
 
 interface CleanCoverInputProps {
@@ -141,10 +152,13 @@ const CleanCoverInput: React.FC<CleanCoverInputProps> = ({
     if (!file) return;
     setUploading(true);
     try {
-      const resizedDataUrl = await processAndResizeImageFile(
+      const maxRequestedSide = Math.max(targetWidth, targetHeight);
+      const maxSide = maxRequestedSide >= 1500 ? 1920 : 900;
+      const quality = maxSide >= 1920 ? 0.82 : 0.85;
+      const resizedDataUrl = await compressImageToDataUrl(
         file,
-        targetWidth,
-        targetHeight
+        maxSide,
+        quality
       );
       onChange(resizedDataUrl);
     } catch (err) {
@@ -160,11 +174,11 @@ const CleanCoverInput: React.FC<CleanCoverInputProps> = ({
       className={
         unboxed
           ? 'flex items-center justify-between gap-4 py-2'
-          : 'flex items-center justify-between gap-4 p-3.5 rounded-xl bg-[#0d0b14] border border-white/10'
+          : 'flex items-center justify-between gap-4 p-3.5 rounded-xl bg-inset border border-line'
       }
     >
-      <div className="flex items-center gap-3.5">
-        <div className="w-12 aspect-[2/3] rounded-lg overflow-hidden border border-white/15 shrink-0 bg-[#141220]">
+      <div className="flex items-center gap-3.5 min-w-0">
+        <div className="w-12 aspect-[2/3] rounded-lg overflow-hidden border border-line shrink-0 bg-surface">
           <CoverArtwork
             src={value || 'preset:stadium'}
             title={label}
@@ -172,9 +186,9 @@ const CleanCoverInput: React.FC<CleanCoverInputProps> = ({
             showBottomPurpleBar={true}
           />
         </div>
-        <div>
-          <span className="block text-xs font-medium text-slate-200">{label}</span>
-          <span className="block text-[11px] font-mono text-slate-500">
+        <div className="min-w-0">
+          <span className="block text-xs font-medium text-ink">{label}</span>
+          <span className="block text-xs text-ink-muted mt-0.5">
             {sizeHint}
           </span>
         </div>
@@ -185,16 +199,18 @@ const CleanCoverInput: React.FC<CleanCoverInputProps> = ({
           <button
             type="button"
             onClick={() => onChange(resetValue)}
-            className="p-2 rounded-xl bg-white/5 hover:bg-rose-500/15 text-slate-400 hover:text-rose-300 transition-colors cursor-pointer"
+            className="p-2 rounded-xl bg-chip hover:bg-rose-500/15 text-ink-muted hover:text-rose-500 transition-colors cursor-pointer"
             title="Remover imagem"
           >
             <Trash2 className="w-4 h-4" />
           </button>
         )}
 
-        <label className="px-3.5 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5 transition-colors shrink-0">
-          <Upload className="w-3.5 h-3.5" />
-          <span>{uploading ? 'Carregando...' : 'Enviar Imagem'}</span>
+        <label className="px-3.5 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5 transition-colors shrink-0">
+          <Upload className="w-3.5 h-3.5 shrink-0" />
+          <span className="whitespace-nowrap">
+            {uploading ? 'Carregando...' : 'Enviar Imagem'}
+          </span>
           <input
             type="file"
             accept="image/*"
@@ -255,7 +271,6 @@ const SortableSelectionBox: React.FC<SortableSelectionBoxProps> = ({
     onChangeSelectedIds(copy);
   };
 
-  // Desktop HTML5 Drag Handlers
   const handleDragStart = (idx: number) => {
     setDraggingIdx(idx);
     draggingIdxRef.current = idx;
@@ -274,7 +289,6 @@ const SortableSelectionBox: React.FC<SortableSelectionBoxProps> = ({
     draggingIdxRef.current = null;
   };
 
-  // Mobile Touch Drag Handlers
   const handleTouchStart = (idx: number) => {
     setDraggingIdx(idx);
     draggingIdxRef.current = idx;
@@ -301,10 +315,9 @@ const SortableSelectionBox: React.FC<SortableSelectionBoxProps> = ({
   };
 
   return (
-    <div className="p-4 rounded-xl bg-[#0d0b14] border border-white/10 space-y-4">
-      {/* 1. Unselected items at the top */}
+    <div className="p-4 rounded-xl bg-inset border border-line space-y-4">
       <div className="space-y-2">
-        <span className="block text-xs font-medium text-slate-400">
+        <span className="block text-xs font-medium text-ink-muted">
           {availableLabel} ({unselectedItems.length})
         </span>
 
@@ -315,19 +328,18 @@ const SortableSelectionBox: React.FC<SortableSelectionBoxProps> = ({
                 key={item.id}
                 type="button"
                 onClick={() => addItem(item.id)}
-                className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-left text-xs bg-[#141220] border border-white/5 text-slate-300 hover:text-white hover:border-[#3b82f6]/50 transition-colors cursor-pointer"
+                className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-left text-xs bg-surface border border-line-soft text-ink-2 hover:text-ink hover:border-brand-soft/50 transition-colors cursor-pointer"
               >
                 <span className="truncate">{item.title}</span>
-                <Plus className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                <Plus className="w-3.5 h-3.5 text-brand-accent shrink-0" />
               </button>
             ))}
           </div>
         )}
       </div>
 
-      {/* 2. Selected items below — Drag and Drop to reorder */}
-      <div className="pt-3 border-t border-white/10 space-y-2">
-        <span className="block text-xs font-medium text-slate-200">
+      <div className="pt-3 border-t border-line space-y-2">
+        <span className="block text-xs font-medium text-ink">
           {selectedLabel} ({selectedItems.length})
         </span>
 
@@ -349,13 +361,13 @@ const SortableSelectionBox: React.FC<SortableSelectionBoxProps> = ({
                   onTouchEnd={handleTouchEnd}
                   className={`flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg border text-xs select-none transition-all cursor-grab active:cursor-grabbing ${
                     isDragging
-                      ? 'bg-[#2563eb]/40 border-[#3b82f6] text-white scale-[1.01] shadow-lg'
-                      : 'bg-[#2563eb]/20 border-[#2563eb]/50 text-white'
+                      ? 'bg-brand/25 border-brand-soft text-ink scale-[1.01] shadow-card'
+                      : 'bg-brand/15 border-brand/40 text-ink'
                   }`}
                 >
                   <div className="flex items-center gap-2.5 min-w-0 flex-1 touch-none">
-                    <GripVertical className="w-4 h-4 text-blue-300 shrink-0" />
-                    <span className="font-mono tabular-nums text-blue-300 shrink-0">
+                    <GripVertical className="w-4 h-4 text-brand-accent shrink-0" />
+                    <span className="font-mono tabular-nums text-brand-accent shrink-0">
                       {idx + 1}.
                     </span>
                     <span className="truncate font-medium">{item.title}</span>
@@ -367,7 +379,7 @@ const SortableSelectionBox: React.FC<SortableSelectionBoxProps> = ({
                       e.stopPropagation();
                       removeItem(item.id);
                     }}
-                    className="p-1 rounded hover:bg-white/10 text-blue-200 hover:text-rose-300 transition-colors shrink-0 cursor-pointer"
+                    className="p-1 rounded hover:bg-chip-hover text-ink-2 hover:text-rose-500 transition-colors shrink-0 cursor-pointer"
                     title="Remover"
                   >
                     <X className="w-3.5 h-3.5" />
@@ -423,7 +435,6 @@ const FolderLessonPickerManager: React.FC<FolderLessonPickerManagerProps> = ({
     return getLessonsInFolder(fId).filter((l) => !selectedIds.includes(l.id));
   };
 
-  const unassignedTotal = getLessonsInFolder(UNASSIGNED_FOLDER_ID);
   const unassignedAvailable = getAvailableLessonsInFolder(UNASSIGNED_FOLDER_ID);
 
   const addLesson = (id: string) => {
@@ -497,10 +508,9 @@ const FolderLessonPickerManager: React.FC<FolderLessonPickerManagerProps> = ({
     : [];
 
   return (
-    <div className="pt-3 border-t border-white/10 space-y-3">
-      {/* Header: Aulas da playlist (N) + Botão Adicionar */}
+    <div className="pt-3 border-t border-line space-y-3">
       <div className="flex items-center justify-between gap-3">
-        <span className="text-xs font-semibold text-slate-200">
+        <span className="text-xs font-semibold text-ink">
           {selectedLabel} ({selectedLessons.length})
         </span>
 
@@ -510,16 +520,15 @@ const FolderLessonPickerManager: React.FC<FolderLessonPickerManagerProps> = ({
             setPopupFolderId(null);
             setIsAddPopupOpen(true);
           }}
-          className="px-3.5 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+          className="px-3.5 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
         >
           <Plus className="w-3.5 h-3.5" />
           <span>Adicionar</span>
         </button>
       </div>
 
-      {/* Ordered lessons in playlist */}
       {selectedLessons.length === 0 ? (
-        <p className="text-xs text-slate-400 py-2">
+        <p className="text-xs text-ink-muted py-2">
           Nenhuma aula adicionada ainda. Clique em Adicionar para escolher aulas das pastas.
         </p>
       ) : (
@@ -540,13 +549,13 @@ const FolderLessonPickerManager: React.FC<FolderLessonPickerManagerProps> = ({
                 onTouchEnd={handleTouchEnd}
                 className={`flex items-center justify-between gap-2 px-3.5 py-3 rounded-xl border text-xs select-none transition-all cursor-grab active:cursor-grabbing ${
                   isDragging
-                    ? 'bg-[#2563eb]/40 border-[#3b82f6] text-white scale-[1.01] shadow-lg'
-                    : 'bg-[#1a1430] border-[#2563eb]/45 text-white'
+                    ? 'bg-brand/25 border-brand-soft text-ink scale-[1.01] shadow-card'
+                    : 'bg-surface-2 border-brand/40 text-ink'
                 }`}
               >
                 <div className="flex items-center gap-2.5 min-w-0 flex-1 touch-none">
-                  <GripVertical className="w-4 h-4 text-blue-300 shrink-0" />
-                  <span className="font-mono tabular-nums text-blue-300 shrink-0">
+                  <GripVertical className="w-4 h-4 text-brand-accent shrink-0" />
+                  <span className="font-mono tabular-nums text-brand-accent shrink-0">
                     {idx + 1}.
                   </span>
                   <span className="truncate font-medium">{lesson.title}</span>
@@ -558,7 +567,7 @@ const FolderLessonPickerManager: React.FC<FolderLessonPickerManagerProps> = ({
                     e.stopPropagation();
                     removeLesson(lesson.id);
                   }}
-                  className="p-1 rounded-lg hover:bg-white/10 text-blue-200 hover:text-rose-300 transition-colors shrink-0 cursor-pointer"
+                  className="p-1 rounded-lg hover:bg-chip-hover text-ink-2 hover:text-rose-500 transition-colors shrink-0 cursor-pointer"
                   title="Remover da playlist"
                 >
                   <X className="w-4 h-4" />
@@ -569,23 +578,21 @@ const FolderLessonPickerManager: React.FC<FolderLessonPickerManagerProps> = ({
         </div>
       )}
 
-      {/* POPUP: PASTAS -> AULAS DISPONÍVEIS */}
       {isAddPopupOpen && (
         <div
           onClick={() => {
             setIsAddPopupOpen(false);
             setPopupFolderId(null);
           }}
-          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-[90] bg-black/75 backdrop-blur-sm flex items-center justify-center p-0 sm:p-4"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md rounded-2xl bg-[#0d1527] border border-white/10 shadow-2xl overflow-hidden flex flex-col max-h-[82vh]"
+            className="h-[100dvh] max-h-[100dvh] w-full rounded-none sm:h-auto sm:max-h-[82dvh] sm:rounded-2xl max-w-md bg-surface border-0 sm:border border-line shadow-pop overflow-hidden flex flex-col"
           >
-            {/* Popup Top Bar */}
-            <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between gap-3">
+            <div className="px-5 py-4 border-b border-line flex items-center justify-between gap-3">
               {popupFolderId === null ? (
-                <h4 className="text-sm font-bold text-white truncate">
+                <h4 className="text-sm font-bold text-ink truncate">
                   Pastas de Aulas
                 </h4>
               ) : (
@@ -593,13 +600,13 @@ const FolderLessonPickerManager: React.FC<FolderLessonPickerManagerProps> = ({
                   <button
                     type="button"
                     onClick={() => setPopupFolderId(null)}
-                    className="inline-flex items-center gap-1 text-xs font-semibold text-blue-300 hover:text-white transition-colors shrink-0 cursor-pointer"
+                    className="inline-flex items-center gap-1 text-xs font-semibold text-brand-accent hover:text-ink transition-colors shrink-0 cursor-pointer"
                   >
                     <ArrowLeft className="w-4 h-4" />
                     <span>Pastas</span>
                   </button>
-                  <span className="text-slate-600">/</span>
-                  <h4 className="text-sm font-bold text-white truncate">
+                  <span className="text-ink-faint">/</span>
+                  <h4 className="text-sm font-bold text-ink truncate">
                     {activePopupFolderName}
                   </h4>
                 </div>
@@ -611,17 +618,16 @@ const FolderLessonPickerManager: React.FC<FolderLessonPickerManagerProps> = ({
                   setIsAddPopupOpen(false);
                   setPopupFolderId(null);
                 }}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer shrink-0"
+                className="p-1.5 rounded-lg text-ink-muted hover:text-ink hover:bg-chip-hover transition-colors cursor-pointer shrink-0"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            {/* Popup Body: Step 1 (Folders) vs Step 2 (Unadded Lessons inside Folder) */}
             <div className="p-4 overflow-y-auto space-y-2 flex-1">
               {popupFolderId === null ? (
                 lessonFolders.length === 0 && unassignedAvailable.length === 0 ? (
-                  <p className="text-xs text-slate-400 text-center py-8">
+                  <p className="text-xs text-ink-muted text-center py-8">
                     Nenhuma pasta ou aula disponível para adicionar.
                   </p>
                 ) : (
@@ -635,20 +641,20 @@ const FolderLessonPickerManager: React.FC<FolderLessonPickerManagerProps> = ({
                           key={folder.id}
                           type="button"
                           onClick={() => setPopupFolderId(folder.id)}
-                          className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-[#0d0b14] hover:bg-white/5 border border-white/10 hover:border-[#3b82f6]/50 text-left transition-colors cursor-pointer"
+                          className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-inset hover:bg-chip-hover border border-line hover:border-brand-soft/50 text-left transition-colors cursor-pointer"
                         >
                           <div className="flex items-center gap-3 min-w-0">
-                            <Folder className="w-4 h-4 text-[#3b82f6] shrink-0" />
-                            <span className="text-xs font-bold text-white truncate">
+                            <Folder className="w-4 h-4 text-brand-soft shrink-0" />
+                            <span className="text-xs font-bold text-ink truncate">
                               {folder.name}
                             </span>
                           </div>
 
                           <div className="flex items-center gap-2 shrink-0">
-                            <span className="text-[11px] font-mono tabular-nums text-slate-400">
+                            <span className="text-[11px] font-mono tabular-nums text-ink-muted">
                               {availableCount} disponíve{availableCount === 1 ? 'l' : 'is'}
                             </span>
-                            <ChevronRight className="w-4 h-4 text-slate-400" />
+                            <ChevronRight className="w-4 h-4 text-ink-muted" />
                           </div>
                         </button>
                       );
@@ -657,7 +663,7 @@ const FolderLessonPickerManager: React.FC<FolderLessonPickerManagerProps> = ({
                     {unassignedAvailable.length > 0 && (
                       <div className="pt-2 space-y-2">
                         {lessonFolders.length > 0 && (
-                          <p className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                          <p className="px-1 text-[11px] font-semibold uppercase tracking-wider text-ink-muted">
                             Aulas sem pasta
                           </p>
                         )}
@@ -666,12 +672,12 @@ const FolderLessonPickerManager: React.FC<FolderLessonPickerManagerProps> = ({
                             key={lesson.id}
                             type="button"
                             onClick={() => addLesson(lesson.id)}
-                            className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-[#0d0b14] hover:bg-[#2563eb]/15 border border-white/10 hover:border-[#3b82f6]/60 text-left transition-colors cursor-pointer"
+                            className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-inset hover:bg-brand/15 border border-line hover:border-brand-soft/60 text-left transition-colors cursor-pointer"
                           >
-                            <span className="text-xs font-medium text-white truncate">
+                            <span className="text-xs font-medium text-ink truncate">
                               {lesson.title}
                             </span>
-                            <Plus className="w-4 h-4 text-[#60a5fa] shrink-0" />
+                            <Plus className="w-4 h-4 text-brand-accent shrink-0" />
                           </button>
                         ))}
                       </div>
@@ -679,7 +685,7 @@ const FolderLessonPickerManager: React.FC<FolderLessonPickerManagerProps> = ({
                   </>
                 )
               ) : activePopupAvailableLessons.length === 0 ? (
-                <p className="text-xs text-slate-400 text-center py-8">
+                <p className="text-xs text-ink-muted text-center py-8">
                   Nenhuma aula disponível para adicionar nesta pasta.
                 </p>
               ) : (
@@ -688,12 +694,12 @@ const FolderLessonPickerManager: React.FC<FolderLessonPickerManagerProps> = ({
                     key={lesson.id}
                     type="button"
                     onClick={() => addLesson(lesson.id)}
-                    className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-[#0d0b14] hover:bg-[#2563eb]/15 border border-white/10 hover:border-[#3b82f6]/60 text-left transition-colors cursor-pointer"
+                    className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-inset hover:bg-brand/15 border border-line hover:border-brand-soft/60 text-left transition-colors cursor-pointer"
                   >
-                    <span className="text-xs font-medium text-white truncate">
+                    <span className="text-xs font-medium text-ink truncate">
                       {lesson.title}
                     </span>
-                    <Plus className="w-4 h-4 text-[#60a5fa] shrink-0" />
+                    <Plus className="w-4 h-4 text-brand-accent shrink-0" />
                   </button>
                 ))
               )}
@@ -726,9 +732,6 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
   onSaveCourse,
   onDeleteCourse,
   onSaveFreeModule,
-  onSaveSimulado,
-  onDeleteSimulado,
-  onToggleReleaseSimulado,
   onSaveTurma,
   onDeleteTurma,
   onSaveStudent,
@@ -739,8 +742,6 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<AdminTab>('lessons');
   const [isSaving, setIsSaving] = useState(false);
-  const [isSimuladoFormOpen, setIsSimuladoFormOpen] = useState(false);
-  const [editingSimulado, setEditingSimulado] = useState<Simulado | null>(null);
 
   // Lesson Folders Navigation, Selection & Transfer State
   const [selectedLessonFolderId, setSelectedLessonFolderId] = useState<
@@ -758,7 +759,6 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
   const [isCreatingFolderInMoveModal, setIsCreatingFolderInMoveModal] =
     useState(false);
 
-  // Filter out the dedicated Free Playlist/Course from regular lists so it is managed cleanly
   const existingLessonIdSet = new Set(lessons.map((l) => l.id));
   const validFolderIdSet = new Set(lessonFolders.map((f) => f.id));
   const unassignedLessons = lessons.filter(
@@ -789,29 +789,34 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
       : lessons.filter((l) => l.isFree).map((l) => l.id)
   ).filter((id) => existingLessonIdSet.has(id));
 
-  // Playlist View State (List vs Create/Edit Window)
+  // Playlist View State
   const [isPlaylistFormOpen, setIsPlaylistFormOpen] = useState(false);
   const [editingPlaylistId, setEditingPlaylistId] = useState<string | null>(null);
   const [playlistTitle, setPlaylistTitle] = useState('');
+  const [playlistTitleError, setPlaylistTitleError] = useState<string | null>(
+    null
+  );
+  const playlistTitleRef = useRef<HTMLInputElement>(null);
   const [playlistCover, setPlaylistCover] = useState('preset:trophy');
   const [playlistLessonIds, setPlaylistLessonIds] = useState<string[]>([]);
 
-  // Course View State (List vs Create/Edit Regular Course vs Configure Aulas Grátis)
+  // Course View State
   const [isCourseFormOpen, setIsCourseFormOpen] = useState(false);
   const [isFreeModuleFormOpen, setIsFreeModuleFormOpen] = useState(false);
   const [editingCourseId, setEditingCourseId] = useState<string | null>(null);
   const [courseTitle, setCourseTitle] = useState('');
+  const [courseTitleError, setCourseTitleError] = useState<string | null>(null);
+  const courseTitleRef = useRef<HTMLInputElement>(null);
   const [courseCover, setCourseCover] = useState('preset:stadium');
   const [coursePlaylistIds, setCoursePlaylistIds] = useState<string[]>([]);
 
-  // Free Module Form State (inside Cursos tab)
+  // Free Module Form State
   const [freeCover, setFreeCover] = useState(
     freeCourse?.coverUrl || 'preset:mastery'
   );
   const [freeLessonIds, setFreeLessonIds] = useState<string[]>(resolvedFreeLessonIds);
   const knownLessonIdsRef = useRef<Set<string>>(new Set(lessons.map((l) => l.id)));
 
-  // Only prune deleted lessons or append brand-new free lessons created while the modal is open
   useEffect(() => {
     const currentIdSet = new Set(lessons.map((l) => l.id));
     const newlyCreatedFreeIds = lessons
@@ -835,11 +840,13 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
   const [isTurmaFormOpen, setIsTurmaFormOpen] = useState(false);
   const [editingTurmaId, setEditingTurmaId] = useState<string | null>(null);
   const [turmaName, setTurmaName] = useState('');
+  const [turmaNameError, setTurmaNameError] = useState<string | null>(null);
+  const turmaNameRef = useRef<HTMLInputElement>(null);
   const [turmaDescription, setTurmaDescription] = useState('');
   const [turmaAccessAll, setTurmaAccessAll] = useState(false);
   const [turmaCourseIds, setTurmaCourseIds] = useState<string[]>([]);
 
-  // Popup to Transfer a Student to Another Turma (only in Alunos tab)
+  // Popup to Transfer a Student to Another Turma
   const [transferringStudent, setTransferringStudent] =
     useState<Student | null>(null);
   const [transferTargetTurmaId, setTransferTargetTurmaId] =
@@ -848,11 +855,14 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
   // Student Filter by Turma in Alunos Tab
   const [studentTurmaFilter, setStudentTurmaFilter] = useState<string>('ALL');
 
-  // Student Window State (Create / Liberate Student)
+  // Student Window State
   const [isStudentPopupOpen, setIsStudentPopupOpen] = useState(false);
   const [studentSearchQuery, setStudentSearchQuery] = useState('');
   const [studentName, setStudentName] = useState('');
   const [studentEmail, setStudentEmail] = useState('');
+  const [studentFormError, setStudentFormError] = useState<string | null>(null);
+  const studentEmailRef = useRef<HTMLInputElement>(null);
+  const studentNameRef = useRef<HTMLInputElement>(null);
   const [studentCpf, setStudentCpf] = useState('');
   const [studentPhone, setStudentPhone] = useState('');
   const [studentBirthDate, setStudentBirthDate] = useState('');
@@ -860,7 +870,6 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
   const [studentAccessAll, setStudentAccessAll] = useState(false);
   const [studentCourseIds, setStudentCourseIds] = useState<string[]>([]);
 
-  // All emails that have entered the platform (from students collection + simuladoSubmissions)
   const knownPlatformEntries = React.useMemo(() => {
     const map = new Map<
       string,
@@ -907,10 +916,12 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
     );
   }, [students, simuladoSubmissions]);
 
-  // Student Edit & Course Liberation Popup State (when clicking on a student card)
+  // Student Edit & Course Liberation Popup State
   const [editingStudentCourses, setEditingStudentCourses] =
     useState<Student | null>(null);
   const [editStuName, setEditStuName] = useState('');
+  const [editStuNameError, setEditStuNameError] = useState<string | null>(null);
+  const editStuNameRef = useRef<HTMLInputElement>(null);
   const [editStuCpf, setEditStuCpf] = useState('');
   const [editStuPhone, setEditStuPhone] = useState('');
   const [editStuBirthDate, setEditStuBirthDate] = useState('');
@@ -918,7 +929,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
   const [editStuAccessAll, setEditStuAccessAll] = useState(false);
   const [editStuCourseIds, setEditStuCourseIds] = useState<string[]>([]);
 
-  // Platform Config Window State (synced when platformConfig snapshot updates)
+  // Platform Config Window State
   const [brandName, setBrandName] = useState(platformConfig.brandName);
   const [heroTitle, setHeroTitle] = useState(platformConfig.heroTitle);
   const [heroSubtitle, setHeroSubtitle] = useState(platformConfig.heroSubtitle);
@@ -948,6 +959,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
   const openNewPlaylistWindow = () => {
     setEditingPlaylistId(null);
     setPlaylistTitle('');
+    setPlaylistTitleError(null);
     setPlaylistCover('preset:trophy');
     setPlaylistLessonIds([]);
     setIsPlaylistFormOpen(true);
@@ -956,6 +968,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
   const openEditPlaylistWindow = (p: Playlist) => {
     setEditingPlaylistId(p.id);
     setPlaylistTitle(p.title);
+    setPlaylistTitleError(null);
     setPlaylistCover(p.coverUrl || 'preset:trophy');
     setPlaylistLessonIds(
       (p.lessonIds || []).filter((id) => existingLessonIdSet.has(id))
@@ -966,11 +979,17 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
   const closePlaylistWindow = () => {
     setIsPlaylistFormOpen(false);
     setEditingPlaylistId(null);
+    setPlaylistTitleError(null);
   };
 
   const handlePlaylistSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!playlistTitle.trim()) return;
+    if (!playlistTitle.trim()) {
+      setPlaylistTitleError('Informe o nome da playlist.');
+      playlistTitleRef.current?.focus();
+      return;
+    }
+    setPlaylistTitleError(null);
     setIsSaving(true);
     try {
       const isNew = !editingPlaylistId;
@@ -1006,6 +1025,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
   const openNewCourseWindow = () => {
     setEditingCourseId(null);
     setCourseTitle('');
+    setCourseTitleError(null);
     setCourseCover('preset:stadium');
     setCoursePlaylistIds([]);
     setIsFreeModuleFormOpen(false);
@@ -1015,6 +1035,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
   const openEditCourseWindow = (c: Course) => {
     setEditingCourseId(c.id);
     setCourseTitle(c.title);
+    setCourseTitleError(null);
     setCourseCover(c.coverUrl || 'preset:stadium');
     setCoursePlaylistIds(
       (c.playlistIds || []).filter((pid) => existingPlaylistIdSet.has(pid))
@@ -1034,11 +1055,17 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
     setIsCourseFormOpen(false);
     setIsFreeModuleFormOpen(false);
     setEditingCourseId(null);
+    setCourseTitleError(null);
   };
 
   const handleCourseSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!courseTitle.trim()) return;
+    if (!courseTitle.trim()) {
+      setCourseTitleError('Informe o nome do curso.');
+      courseTitleRef.current?.focus();
+      return;
+    }
+    setCourseTitleError(null);
     setIsSaving(true);
     try {
       const isNew = !editingCourseId;
@@ -1119,6 +1146,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
   const openNewTurmaForm = () => {
     setEditingTurmaId(null);
     setTurmaName('');
+    setTurmaNameError(null);
     setTurmaDescription('');
     setTurmaAccessAll(false);
     setTurmaCourseIds([]);
@@ -1132,6 +1160,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
     );
     setEditingTurmaId(turma.id);
     setTurmaName(turma.name);
+    setTurmaNameError(null);
     setTurmaDescription(turma.description || '');
     setTurmaAccessAll(Boolean(turma.accessAll));
     setTurmaCourseIds(turma.accessAll ? validRegularIds : existingCourseIds);
@@ -1141,11 +1170,17 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
   const closeTurmaForm = () => {
     setIsTurmaFormOpen(false);
     setEditingTurmaId(null);
+    setTurmaNameError(null);
   };
 
   const handleTurmaSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!turmaName.trim()) return;
+    if (!turmaName.trim()) {
+      setTurmaNameError('Informe o nome da turma.');
+      turmaNameRef.current?.focus();
+      return;
+    }
+    setTurmaNameError(null);
     setIsSaving(true);
     try {
       const isNew = !editingTurmaId;
@@ -1232,6 +1267,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
     setStudentSearchQuery('');
     setStudentName('');
     setStudentEmail('');
+    setStudentFormError(null);
     setStudentCpf('');
     setStudentPhone('');
     setStudentBirthDate('');
@@ -1251,6 +1287,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
   }) => {
     setStudentEmail(entry.email);
     setStudentName(entry.name || entry.email.split('@')[0] || 'Aluno');
+    setStudentFormError(null);
     setStudentCpf(entry.cpf || '');
     setStudentPhone(entry.phone || '');
     setStudentBirthDate(entry.birthDate || '');
@@ -1284,6 +1321,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
     const isAll = Boolean(stuTurma && stuTurma.accessAll);
     setEditingStudentCourses(stu);
     setEditStuName(stu.name || '');
+    setEditStuNameError(null);
     setEditStuCpf(stu.cpf || '');
     setEditStuPhone(stu.phone || '');
     setEditStuBirthDate(formatBirthDateDisplay(stu.birthDate));
@@ -1295,6 +1333,12 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
   const handleSaveStudentCourses = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingStudentCourses) return;
+    if (!editStuName.trim()) {
+      setEditStuNameError('Informe o nome do aluno.');
+      editStuNameRef.current?.focus();
+      return;
+    }
+    setEditStuNameError(null);
     setIsSaving(true);
     try {
       const validRegularIds = regularCourses.map((c) => c.id);
@@ -1342,7 +1386,17 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
   const handleStudentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanEmail = studentEmail.trim().toLowerCase();
-    if (!cleanEmail || !studentName.trim()) return;
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setStudentFormError('Informe um e-mail Google válido.');
+      studentEmailRef.current?.focus();
+      return;
+    }
+    if (!studentName.trim()) {
+      setStudentFormError('Informe o nome do aluno.');
+      studentNameRef.current?.focus();
+      return;
+    }
+    setStudentFormError(null);
     setIsSaving(true);
     try {
       const docId = emailToStudentDocId(cleanEmail);
@@ -1427,10 +1481,252 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
     }
   };
 
+  // --- MIGRATION HANDLERS (A4.1, A4.2 & Fase 1.6 Image Optimization) ---
+  const [migratingKeys, setMigratingKeys] = useState(false);
+  const [migrationKeysMsg, setMigrationKeysMsg] = useState<string | null>(null);
+  const [migratingPdfs, setMigratingPdfs] = useState(false);
+  const [migrationPdfsMsg, setMigrationPdfsMsg] = useState<string | null>(null);
+  const [optimizingImages, setOptimizingImages] = useState(false);
+  const [optimizeImagesMsg, setOptimizeImagesMsg] = useState<string | null>(
+    null
+  );
+
+  const simuladosWithInlineKey = simulados.filter((s) => Boolean(s.answerKey));
+
+  const handleMigrateGabaritos = async () => {
+    if (migratingKeys) return;
+    setMigratingKeys(true);
+    setMigrationKeysMsg(null);
+    try {
+      let count = 0;
+      for (const sim of simulados) {
+        if (!sim.answerKey) continue;
+        const keyRef = doc(db, 'simuladoKeys', sim.id);
+        const existingKeySnap = await getDoc(keyRef).catch(() => null);
+        const existingKeyData = existingKeySnap?.exists()
+          ? existingKeySnap.data()
+          : null;
+
+        await setDoc(keyRef, {
+          answerKey: sim.answerKey.replace(/[^ABCDE]/g, 'A'),
+          authorId: existingKeyData?.authorId || sim.authorId || currentUserUid,
+          createdAt:
+            existingKeyData?.createdAt || sim.createdAt || serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+
+        const simRef = doc(db, 'simulados', sim.id);
+        await setDoc(simRef, {
+          title: sim.title,
+          area: sim.area,
+          questionCount: sim.questionCount,
+          timeLimitMinutes: sim.timeLimitMinutes || 0,
+          pdfUrl: sim.pdfUrl || '',
+          pdfTitle: sim.pdfTitle || '',
+          resultsReleased: Boolean(sim.resultsReleased),
+          isPublished: true,
+          authorId: sim.authorId || currentUserUid,
+          createdAt: sim.createdAt || serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        count++;
+      }
+      setMigrationKeysMsg(
+        `Sucesso: ${count} gabarito(s) migrado(s) para a coleção simuladoKeys!`
+      );
+    } catch (err) {
+      console.error('Erro ao migrar gabaritos:', err);
+      setMigrationKeysMsg('Erro durante a migração de gabaritos. Veja o console.');
+    } finally {
+      setMigratingKeys(false);
+    }
+  };
+
+  const handleMigrateFreePdfs = async () => {
+    if (migratingPdfs) return;
+    setMigratingPdfs(true);
+    setMigrationPdfsMsg(null);
+    try {
+      const freeLessons = lessons.filter((l) => l.isFree);
+      let pdfCount = 0;
+      for (const lesson of freeLessons) {
+        if (!lesson.pdfs) continue;
+        for (const pdf of lesson.pdfs) {
+          if (pdf.url && pdf.url.startsWith('chunked:')) {
+            await updatePdfChunksIsFree(pdf.url, true);
+            pdfCount++;
+          }
+        }
+      }
+      setMigrationPdfsMsg(
+        `Sucesso: partes de ${pdfCount} PDF(s) de aulas grátis marcadas com isFree: true!`
+      );
+    } catch (err) {
+      console.error('Erro ao marcar PDFs grátis:', err);
+      setMigrationPdfsMsg('Erro durante a atualização dos PDFs grátis.');
+    } finally {
+      setMigratingPdfs(false);
+    }
+  };
+
+  const handleOptimizeExistingImages = async () => {
+    if (optimizingImages) return;
+    setOptimizingImages(true);
+    setOptimizeImagesMsg(null);
+    const MIN_BYTES = 150 * 1024;
+    let optimizedCount = 0;
+    let savedBytes = 0;
+
+    try {
+      // 1. Courses (coverUrl -> 900, bannerUrl -> 1920)
+      for (const course of courses) {
+        let nextCover = course.coverUrl || '';
+        let nextBanner = course.bannerUrl || '';
+        let changed = false;
+
+        if (nextCover.startsWith('data:image/') && nextCover.length > MIN_BYTES) {
+          const compressed = await recompressDataUrlImage(nextCover, 900, 0.85);
+          if (compressed.length < nextCover.length) {
+            savedBytes += nextCover.length - compressed.length;
+            nextCover = compressed;
+            changed = true;
+            optimizedCount++;
+          }
+        }
+
+        if (
+          nextBanner.startsWith('data:image/') &&
+          nextBanner.length > MIN_BYTES
+        ) {
+          const compressed = await recompressDataUrlImage(
+            nextBanner,
+            1920,
+            0.82
+          );
+          if (compressed.length < nextBanner.length) {
+            savedBytes += nextBanner.length - compressed.length;
+            nextBanner = compressed;
+            changed = true;
+            optimizedCount++;
+          }
+        }
+
+        if (changed) {
+          await setDoc(doc(db, 'courses', course.id), {
+            title: course.title,
+            subtitle: course.subtitle || '',
+            description: course.description || '',
+            category: course.category || 'Cursos',
+            coverUrl: nextCover,
+            bannerUrl: nextBanner,
+            playlistIds: course.playlistIds || [],
+            featured: Boolean(course.featured),
+            isPublished: true,
+            authorId: course.authorId || currentUserUid,
+            createdAt: course.createdAt || serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
+
+      // 2. Playlists (coverUrl -> 900)
+      for (const pl of playlists) {
+        const origCover = pl.coverUrl || '';
+        if (origCover.startsWith('data:image/') && origCover.length > MIN_BYTES) {
+          const compressed = await recompressDataUrlImage(origCover, 900, 0.85);
+          if (compressed.length < origCover.length) {
+            savedBytes += origCover.length - compressed.length;
+            optimizedCount++;
+            await setDoc(doc(db, 'playlists', pl.id), {
+              title: pl.title,
+              description: pl.description || '',
+              coverUrl: compressed,
+              lessonIds: pl.lessonIds || [],
+              isPublished: true,
+              authorId: pl.authorId || currentUserUid,
+              createdAt: pl.createdAt || serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          }
+        }
+      }
+
+      // 3. Lessons (thumbnailUrl -> 720)
+      for (const lesson of lessons) {
+        const origThumb = lesson.thumbnailUrl || '';
+        if (origThumb.startsWith('data:image/') && origThumb.length > MIN_BYTES) {
+          const compressed = await recompressDataUrlImage(origThumb, 720, 0.85);
+          if (compressed.length < origThumb.length) {
+            savedBytes += origThumb.length - compressed.length;
+            optimizedCount++;
+            await setDoc(doc(db, 'lessons', lesson.id), {
+              title: lesson.title,
+              description: lesson.description || '',
+              youtubeId: lesson.youtubeId,
+              duration: lesson.duration || '15:00',
+              thumbnailUrl: compressed,
+              pdfs: lesson.pdfs || [],
+              folderId: lesson.folderId || '',
+              isFree: Boolean(lesson.isFree),
+              isPublished: true,
+              authorId: lesson.authorId || currentUserUid,
+              createdAt: lesson.createdAt || serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          }
+        }
+      }
+
+      // 4. Platform Config (heroBgUrl -> 1920)
+      const origHero = platformConfig.heroBgUrl || '';
+      if (origHero.startsWith('data:image/') && origHero.length > MIN_BYTES) {
+        const compressed = await recompressDataUrlImage(origHero, 1920, 0.82);
+        if (compressed.length < origHero.length) {
+          savedBytes += origHero.length - compressed.length;
+          optimizedCount++;
+          setHeroBgUrl(compressed);
+          await onSaveConfig({
+            brandName: sanitizeString(brandName, 60, 'CURSO VÉRTICE'),
+            heroTitle: sanitizeString(
+              heroTitle,
+              140,
+              'Sua plataforma de cursos para Enem e vestibulares'
+            ),
+            heroSubtitle: sanitizeString(
+              heroSubtitle,
+              240,
+              'Especialista em física, química e matemática'
+            ),
+            heroCtaText: sanitizeString(heroCtaText, 60, 'Confira agora!'),
+            heroBgUrl: compressed,
+            restrictToStudentList: Boolean(restrictToStudentList),
+            updatedBy: currentUserUid,
+          });
+        }
+      }
+
+      const savedKb = Math.max(0, Math.round(savedBytes / 1024));
+      if (optimizedCount === 0) {
+        setOptimizeImagesMsg(
+          'Todas as imagens já estão otimizadas (nenhuma acima de 150 KB precisou de redução).'
+        );
+      } else {
+        setOptimizeImagesMsg(
+          `Sucesso: ${optimizedCount} imagem(ns) otimizada(s), economizando ${savedKb} KB!`
+        );
+      }
+    } catch (err) {
+      console.error('Erro ao otimizar imagens:', err);
+      setOptimizeImagesMsg('Erro ao otimizar imagens. Veja o console.');
+    } finally {
+      setOptimizingImages(false);
+    }
+  };
+
   return (
-    <div className="w-full max-w-[1440px] mx-auto px-5 md:px-10 py-6 space-y-6">
+    <div className="w-full max-w-[1440px] mx-auto px-5 md:px-10 py-6 pb-24 sm:pb-6 space-y-6">
       {/* Minimalist Navigation Tabs */}
-      <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-white/10">
+      <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-line">
         <div className="flex items-center gap-2 overflow-x-auto py-0.5">
           <button
             type="button"
@@ -1441,8 +1737,8 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
             }}
             className={`px-3.5 py-2 rounded-xl border text-xs font-semibold flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               activeTab === 'lessons'
-                ? 'bg-[#2563eb] border-[#2563eb] text-white'
-                : 'bg-[#151221] border-white/10 text-slate-400 hover:text-white'
+                ? 'bg-brand border-brand text-white'
+                : 'bg-surface border-line text-ink-muted hover:text-ink'
             }`}
           >
             <Video className="w-3.5 h-3.5" />
@@ -1457,8 +1753,8 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
             }}
             className={`px-3.5 py-2 rounded-xl border text-xs font-semibold flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               activeTab === 'playlists'
-                ? 'bg-[#2563eb] border-[#2563eb] text-white'
-                : 'bg-[#151221] border-white/10 text-slate-400 hover:text-white'
+                ? 'bg-brand border-brand text-white'
+                : 'bg-surface border-line text-ink-muted hover:text-ink'
             }`}
           >
             <ListVideo className="w-3.5 h-3.5" />
@@ -1474,8 +1770,8 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
             }}
             className={`px-3.5 py-2 rounded-xl border text-xs font-semibold flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               activeTab === 'courses'
-                ? 'bg-[#2563eb] border-[#2563eb] text-white'
-                : 'bg-[#151221] border-white/10 text-slate-400 hover:text-white'
+                ? 'bg-brand border-brand text-white'
+                : 'bg-surface border-line text-ink-muted hover:text-ink'
             }`}
           >
             <BookOpen className="w-3.5 h-3.5" />
@@ -1491,8 +1787,8 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
             }}
             className={`px-3.5 py-2 rounded-xl border text-xs font-semibold flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               activeTab === 'turmas'
-                ? 'bg-[#2563eb] border-[#2563eb] text-white'
-                : 'bg-[#151221] border-white/10 text-slate-400 hover:text-white'
+                ? 'bg-brand border-brand text-white'
+                : 'bg-surface border-line text-ink-muted hover:text-ink'
             }`}
           >
             <GraduationCap className="w-3.5 h-3.5" />
@@ -1504,8 +1800,8 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
             onClick={() => setActiveTab('students')}
             className={`px-3.5 py-2 rounded-xl border text-xs font-semibold flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               activeTab === 'students'
-                ? 'bg-[#2563eb] border-[#2563eb] text-white'
-                : 'bg-[#151221] border-white/10 text-slate-400 hover:text-white'
+                ? 'bg-brand border-brand text-white'
+                : 'bg-surface border-line text-ink-muted hover:text-ink'
             }`}
           >
             <Users className="w-3.5 h-3.5" />
@@ -1514,11 +1810,24 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
 
           <button
             type="button"
+            onClick={() => setActiveTab('mentoria')}
+            className={`px-3.5 py-2 rounded-xl border text-xs font-semibold flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              activeTab === 'mentoria'
+                ? 'bg-brand border-brand text-white'
+                : 'bg-surface border-line text-ink-muted hover:text-ink'
+            }`}
+          >
+            <Compass className="w-3.5 h-3.5" />
+            Mentoria
+          </button>
+
+          <button
+            type="button"
             onClick={() => setActiveTab('config')}
             className={`px-3.5 py-2 rounded-xl border text-xs font-semibold flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               activeTab === 'config'
-                ? 'bg-[#2563eb] border-[#2563eb] text-white'
-                : 'bg-[#151221] border-white/10 text-slate-400 hover:text-white'
+                ? 'bg-brand border-brand text-white'
+                : 'bg-surface border-line text-ink-muted hover:text-ink'
             }`}
           >
             <Sliders className="w-3.5 h-3.5" />
@@ -1529,7 +1838,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
             <button
               type="button"
               onClick={onOpenCalendar}
-              className="px-3.5 py-2 rounded-full bg-gradient-to-r from-[#2563eb]/25 to-[#60a5fa]/25 hover:from-[#2563eb] hover:to-[#60a5fa] border border-[#3b82f6]/50 text-blue-200 hover:text-white text-xs font-bold flex items-center gap-2 transition-all whitespace-nowrap shrink-0 shadow-[0_0_18px_rgba(37,99,235,0.25)] cursor-pointer"
+              className="px-3.5 py-2 rounded-full bg-brand/15 hover:bg-brand border border-brand-soft/50 text-brand-accent hover:text-white text-xs font-bold flex items-center gap-2 transition-all whitespace-nowrap shrink-0 shadow-glow-sm cursor-pointer"
               title="Abrir Calendário do Curso"
             >
               <CalendarIcon className="w-3.5 h-3.5" />
@@ -1539,15 +1848,14 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
         </div>
       </div>
 
-      {/* TAB 1: AULAS — PASTAS NO TOPO + AULAS SEM PASTA DIRETO NA TELA (SELEÇÃO INDIVIDUAL OU EM LOTE PARA TRANSFERIR DE PASTA) */}
+      {/* TAB 1: AULAS */}
       {activeTab === 'lessons' && (
         <div className="space-y-6">
           {selectedLessonFolderId === null ? (
             <>
-              {/* SEÇÃO 1: PASTAS */}
               <div className="space-y-3.5">
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <h2 className="text-base font-bold text-white">Pastas</h2>
+                  <h2 className="text-base font-bold text-ink">Pastas</h2>
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
@@ -1555,16 +1863,16 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                         setIsCreatingFolder(true);
                         setNewFolderName('');
                       }}
-                      className="px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white text-xs font-bold flex items-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer"
+                      className="px-3.5 py-2 rounded-xl bg-chip hover:bg-chip-hover border border-line text-ink text-xs font-bold flex items-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer"
                     >
-                      <FolderPlus className="w-4 h-4 text-[#60a5fa]" />
+                      <FolderPlus className="w-4 h-4 text-brand-accent" />
                       Nova Pasta
                     </button>
 
                     <button
                       type="button"
                       onClick={() => onOpenNewLessonModal(false, '')}
-                      className="px-4 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold flex items-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer"
+                      className="px-4 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold flex items-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer"
                     >
                       <Plus className="w-4 h-4" />
                       Criar Aula
@@ -1574,6 +1882,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
 
                 {isCreatingFolder && (
                   <form
+                    noValidate
                     onSubmit={async (e) => {
                       e.preventDefault();
                       if (!newFolderName.trim() || isSaving) return;
@@ -1599,19 +1908,18 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                   >
                     <input
                       type="text"
-                      required
                       autoFocus
                       maxLength={120}
                       value={newFolderName}
                       onChange={(e) => setNewFolderName(e.target.value)}
                       placeholder="Digite o nome da pasta"
-                      className="flex-1 min-w-[200px] px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-sm text-white focus:outline-none focus:border-[#3b82f6]"
+                      className="flex-1 min-w-[200px] px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
                     />
                     <div className="flex items-center gap-2 shrink-0">
                       <button
                         type="submit"
                         disabled={isSaving}
-                        className="px-4 py-2.5 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
+                        className="px-4 py-2.5 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
                       >
                         Criar
                       </button>
@@ -1621,7 +1929,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                           setIsCreatingFolder(false);
                           setNewFolderName('');
                         }}
-                        className="px-3.5 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-semibold transition-colors cursor-pointer"
+                        className="px-3.5 py-2.5 rounded-xl bg-chip hover:bg-chip-hover text-ink-2 text-xs font-semibold transition-colors cursor-pointer"
                       >
                         Cancelar
                       </button>
@@ -1641,6 +1949,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                         return (
                           <form
                             key={folder.id}
+                            noValidate
                             onSubmit={async (e) => {
                               e.preventDefault();
                               if (!editingFolderName.trim() || isSaving) return;
@@ -1665,23 +1974,22 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                                 setIsSaving(false);
                               }
                             }}
-                            className="flex items-center gap-2 p-3.5 rounded-2xl bg-[#141220] border border-[#3b82f6]"
+                            className="flex items-center gap-2 p-3.5 rounded-2xl bg-surface border border-brand-soft"
                           >
                             <input
                               type="text"
-                              required
                               autoFocus
                               maxLength={120}
                               value={editingFolderName}
                               onChange={(e) =>
                                 setEditingFolderName(e.target.value)
                               }
-                              className="flex-1 min-w-0 px-3 py-1.5 rounded-lg bg-[#0d0b14] border border-white/10 text-xs text-white focus:outline-none focus:border-[#3b82f6]"
+                              className="flex-1 min-w-0 px-3 py-1.5 rounded-lg bg-inset border border-line text-xs text-ink focus:outline-none focus:border-brand-soft"
                             />
                             <button
                               type="submit"
                               disabled={isSaving}
-                              className="px-3 py-1.5 rounded-lg bg-[#2563eb] text-white text-xs font-bold shrink-0 cursor-pointer"
+                              className="px-3 py-1.5 rounded-lg bg-brand text-white text-xs font-bold shrink-0 cursor-pointer"
                             >
                               Salvar
                             </button>
@@ -1691,7 +1999,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                                 setEditingFolderId(null);
                                 setEditingFolderName('');
                               }}
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-white shrink-0 cursor-pointer"
+                              className="p-1.5 rounded-lg text-ink-muted hover:text-ink shrink-0 cursor-pointer"
                             >
                               <X className="w-4 h-4" />
                             </button>
@@ -1706,17 +2014,17 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                             setSelectedLessonFolderId(folder.id);
                             setSelectedMoveLessonIds([]);
                           }}
-                          className="flex items-center justify-between gap-3 p-4 rounded-2xl bg-[#141220] border border-white/10 hover:border-[#3b82f6]/60 transition-colors cursor-pointer"
+                          className="flex items-center justify-between gap-3 p-4 rounded-2xl bg-surface border border-line hover:border-brand-soft/60 shadow-card transition-colors cursor-pointer"
                         >
                           <div className="flex items-center gap-3.5 min-w-0">
-                            <div className="w-10 h-10 rounded-xl bg-[#2563eb]/15 text-[#60a5fa] flex items-center justify-center shrink-0">
+                            <div className="w-10 h-10 rounded-xl bg-brand/15 text-brand-accent flex items-center justify-center shrink-0">
                               <Folder className="w-5 h-5" />
                             </div>
                             <div className="min-w-0">
-                              <h3 className="text-sm font-bold text-white truncate">
+                              <h3 className="text-sm font-bold text-ink truncate">
                                 {folder.name}
                               </h3>
-                              <p className="text-xs text-slate-400 font-mono tabular-nums mt-0.5">
+                              <p className="text-xs text-ink-muted font-mono tabular-nums mt-0.5">
                                 {folderLessonCount} aula
                                 {folderLessonCount !== 1 ? 's' : ''}
                               </p>
@@ -1731,7 +2039,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                                 setEditingFolderId(folder.id);
                                 setEditingFolderName(folder.name);
                               }}
-                              className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                              className="p-2 rounded-lg text-ink-2 hover:text-ink hover:bg-chip-hover transition-colors cursor-pointer"
                               title="Renomear pasta"
                             >
                               <Edit3 className="w-4 h-4" />
@@ -1742,7 +2050,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                                 e.stopPropagation();
                                 onDeleteLessonFolder(folder.id);
                               }}
-                              className="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                              className="p-2 rounded-lg text-ink-muted hover:text-rose-500 hover:bg-rose-500/10 transition-colors cursor-pointer"
                               title="Excluir pasta"
                             >
                               <Trash2 className="w-4 h-4" />
@@ -1755,7 +2063,6 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                 )}
               </div>
 
-              {/* SEÇÃO 2: AULAS SEM PASTA DIRETAMENTE NA TELA DE AULAS */}
               {(() => {
                 const unassignedIds = unassignedLessons.map((l) => l.id);
                 const selectedUnassignedIds = selectedMoveLessonIds.filter(
@@ -1768,9 +2075,9 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                 return (
                   <div className="space-y-3.5">
                     {unassignedLessons.length > 0 && (
-                      <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-white/10">
+                      <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-line">
                         <div className="flex items-center gap-3">
-                          <h3 className="text-sm font-bold text-white">
+                          <h3 className="text-sm font-bold text-ink">
                             {lessonFolders.length > 0
                               ? `Aulas sem pasta (${unassignedLessons.length})`
                               : `Aulas (${unassignedLessons.length})`}
@@ -1784,7 +2091,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                                 setSelectedMoveLessonIds(unassignedIds);
                               }
                             }}
-                            className="text-xs font-semibold text-blue-300 hover:text-white transition-colors cursor-pointer"
+                            className="text-xs font-semibold text-brand-accent hover:text-ink transition-colors cursor-pointer"
                           >
                             {allUnassignedSelected
                               ? 'Desmarcar todas'
@@ -1800,7 +2107,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                               setIsCreatingFolderInMoveModal(false);
                               setMoveModalNewFolderName('');
                             }}
-                            className="px-3.5 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold inline-flex items-center gap-2 transition-colors cursor-pointer shadow-md"
+                            className="px-3.5 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold inline-flex items-center gap-2 transition-colors cursor-pointer shadow-glow-sm"
                           >
                             <ArrowRightLeft className="w-3.5 h-3.5" />
                             <span>
@@ -1813,7 +2120,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
 
                     {unassignedLessons.length === 0 &&
                     lessonFolders.length === 0 ? (
-                      <p className="text-xs text-slate-400 py-6">
+                      <p className="text-xs text-ink-muted py-6">
                         Nenhuma pasta ou aula criada ainda. Clique em Nova Pasta ou Criar Aula acima.
                       </p>
                     ) : (
@@ -1833,23 +2140,23 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                                       : [...prev, lesson.id]
                                   );
                                 }}
-                                className={`flex items-center gap-3 p-3.5 rounded-2xl border transition-colors cursor-pointer ${
+                                className={`cv-auto-row flex items-center gap-3 p-3.5 rounded-2xl border shadow-card transition-colors cursor-pointer ${
                                   isSelected
-                                    ? 'bg-[#1a1430] border-[#3b82f6]'
-                                    : 'bg-[#141220] border-white/10 hover:border-white/20'
+                                    ? 'bg-surface-2 border-brand-soft'
+                                    : 'bg-surface border-line hover:border-line-strong'
                                 }`}
                               >
                                 <div
                                   className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 transition-colors ${
                                     isSelected
-                                      ? 'bg-[#2563eb] border-[#2563eb] text-white'
-                                      : 'border-white/20 bg-[#0d0b14] text-transparent'
+                                      ? 'bg-brand border-brand text-white'
+                                      : 'border-line-strong bg-inset text-transparent'
                                   }`}
                                 >
                                   <Check className="w-3.5 h-3.5" />
                                 </div>
 
-                                <div className="w-12 aspect-[3/4] rounded-xl overflow-hidden shrink-0 border border-white/10">
+                                <div className="w-12 aspect-[3/4] rounded-xl overflow-hidden shrink-0 border border-line">
                                   <CoverArtwork
                                     src={lesson.thumbnailUrl}
                                     title={lesson.title}
@@ -1859,11 +2166,11 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                                 </div>
 
                                 <div className="flex-1 min-w-0">
-                                  <h3 className="text-sm font-bold text-white truncate">
+                                  <h3 className="text-sm font-bold text-ink truncate">
                                     {lesson.title}
                                   </h3>
                                   {lesson.pdfs?.length > 0 && (
-                                    <p className="text-xs text-slate-400 mt-0.5 font-mono tabular-nums">
+                                    <p className="text-xs text-ink-muted mt-0.5 font-mono tabular-nums">
                                       {lesson.pdfs.length} PDF
                                       {lesson.pdfs.length > 1 ? 's' : ''}
                                     </p>
@@ -1881,7 +2188,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                                       setIsCreatingFolderInMoveModal(false);
                                       setMoveModalNewFolderName('');
                                     }}
-                                    className="p-2 rounded-lg text-blue-300 hover:text-white hover:bg-[#2563eb]/20 transition-colors cursor-pointer"
+                                    className="p-2 rounded-lg text-brand-accent hover:text-ink hover:bg-brand/15 transition-colors cursor-pointer"
                                     title="Transferir para uma pasta"
                                   >
                                     <ArrowRightLeft className="w-4 h-4" />
@@ -1889,7 +2196,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => onOpenEditLessonModal(lesson)}
-                                    className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                                    className="p-2 rounded-lg text-ink-2 hover:text-ink hover:bg-chip-hover transition-colors cursor-pointer"
                                     title="Editar aula"
                                   >
                                     <Edit3 className="w-4 h-4" />
@@ -1897,7 +2204,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => onDeleteLesson(lesson.id)}
-                                    className="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                                    className="p-2 rounded-lg text-ink-muted hover:text-rose-500 hover:bg-rose-500/10 transition-colors cursor-pointer"
                                     title="Excluir aula"
                                   >
                                     <Trash2 className="w-4 h-4" />
@@ -1914,7 +2221,6 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
               })()}
             </>
           ) : (
-            /* DENTRO DE UMA PASTA ESPECÍFICA */
             (() => {
               const currentFolder =
                 lessonFolders.find((f) => f.id === selectedLessonFolderId) ||
@@ -1941,13 +2247,13 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                           setSelectedLessonFolderId(null);
                           setSelectedMoveLessonIds([]);
                         }}
-                        className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-300 hover:text-white cursor-pointer shrink-0"
+                        className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink-2 hover:text-ink cursor-pointer shrink-0"
                       >
-                        <ArrowLeft className="w-4 h-4 text-[#3b82f6]" />
+                        <ArrowLeft className="w-4 h-4 text-brand-soft" />
                         <span>Voltar</span>
                       </button>
-                      <span className="text-slate-600">/</span>
-                      <h2 className="text-base font-bold text-white truncate">
+                      <span className="text-ink-faint">/</span>
+                      <h2 className="text-base font-bold text-ink truncate">
                         {folderDisplayName}
                       </h2>
 
@@ -1961,7 +2267,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                               setSelectedMoveLessonIds(folderLessonIds);
                             }
                           }}
-                          className="text-xs font-semibold text-blue-300 hover:text-white transition-colors cursor-pointer ml-1 shrink-0"
+                          className="text-xs font-semibold text-brand-accent hover:text-ink transition-colors cursor-pointer ml-1 shrink-0"
                         >
                           {allInFolderSelected
                             ? 'Desmarcar todas'
@@ -1979,9 +2285,9 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                             setIsCreatingFolderInMoveModal(false);
                             setMoveModalNewFolderName('');
                           }}
-                          className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-white text-xs font-bold inline-flex items-center gap-2 transition-colors cursor-pointer"
+                          className="px-3.5 py-2 rounded-xl bg-chip hover:bg-chip-hover border border-line text-ink text-xs font-bold inline-flex items-center gap-2 transition-colors cursor-pointer"
                         >
-                          <ArrowRightLeft className="w-3.5 h-3.5 text-blue-300" />
+                          <ArrowRightLeft className="w-3.5 h-3.5 text-brand-accent" />
                           <span>
                             Trocar de pasta ({selectedInFolderIds.length})
                           </span>
@@ -1993,7 +2299,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                         onClick={() =>
                           onOpenNewLessonModal(false, selectedLessonFolderId)
                         }
-                        className="px-4 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold flex items-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer"
+                        className="px-4 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold flex items-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer"
                       >
                         <Plus className="w-4 h-4" />
                         Criar Aula
@@ -2002,7 +2308,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                   </div>
 
                   {folderLessons.length === 0 ? (
-                    <p className="text-xs text-slate-400 py-8">
+                    <p className="text-xs text-ink-muted py-8">
                       Nenhuma aula nesta pasta ainda. Clique em Criar Aula acima para adicionar.
                     </p>
                   ) : (
@@ -2021,23 +2327,23 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                                   : [...prev, lesson.id]
                               );
                             }}
-                            className={`flex items-center gap-3 p-3.5 rounded-2xl border transition-colors cursor-pointer ${
+                            className={`cv-auto-row flex items-center gap-3 p-3.5 rounded-2xl border shadow-card transition-colors cursor-pointer ${
                               isSelected
-                                ? 'bg-[#1a1430] border-[#3b82f6]'
-                                : 'bg-[#141220] border-white/10 hover:border-white/20'
+                                ? 'bg-surface-2 border-brand-soft'
+                                : 'bg-surface border-line hover:border-line-strong'
                             }`}
                           >
                             <div
                               className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 transition-colors ${
                                 isSelected
-                                  ? 'bg-[#2563eb] border-[#2563eb] text-white'
-                                  : 'border-white/20 bg-[#0d0b14] text-transparent'
+                                  ? 'bg-brand border-brand text-white'
+                                  : 'border-line-strong bg-inset text-transparent'
                               }`}
                             >
                               <Check className="w-3.5 h-3.5" />
                             </div>
 
-                            <div className="w-12 aspect-[3/4] rounded-xl overflow-hidden shrink-0 border border-white/10">
+                            <div className="w-12 aspect-[3/4] rounded-xl overflow-hidden shrink-0 border border-line">
                               <CoverArtwork
                                 src={lesson.thumbnailUrl}
                                 title={lesson.title}
@@ -2047,11 +2353,11 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                             </div>
 
                             <div className="flex-1 min-w-0">
-                              <h3 className="text-sm font-bold text-white truncate">
+                              <h3 className="text-sm font-bold text-ink truncate">
                                 {lesson.title}
                               </h3>
                               {lesson.pdfs?.length > 0 && (
-                                <p className="text-xs text-slate-400 mt-0.5 font-mono tabular-nums">
+                                <p className="text-xs text-ink-muted mt-0.5 font-mono tabular-nums">
                                   {lesson.pdfs.length} PDF
                                   {lesson.pdfs.length > 1 ? 's' : ''}
                                 </p>
@@ -2069,7 +2375,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                                   setIsCreatingFolderInMoveModal(false);
                                   setMoveModalNewFolderName('');
                                 }}
-                                className="p-2 rounded-lg text-blue-300 hover:text-white hover:bg-[#2563eb]/20 transition-colors cursor-pointer"
+                                className="p-2 rounded-lg text-brand-accent hover:text-ink hover:bg-brand/15 transition-colors cursor-pointer"
                                 title="Trocar de pasta"
                               >
                                 <ArrowRightLeft className="w-4 h-4" />
@@ -2077,7 +2383,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                               <button
                                 type="button"
                                 onClick={() => onOpenEditLessonModal(lesson)}
-                                className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                                className="p-2 rounded-lg text-ink-2 hover:text-ink hover:bg-chip-hover transition-colors cursor-pointer"
                                 title="Editar aula"
                               >
                                 <Edit3 className="w-4 h-4" />
@@ -2085,7 +2391,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                               <button
                                 type="button"
                                 onClick={() => onDeleteLesson(lesson.id)}
-                                className="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                                className="p-2 rounded-lg text-ink-muted hover:text-rose-500 hover:bg-rose-500/10 transition-colors cursor-pointer"
                                 title="Excluir aula"
                               >
                                 <Trash2 className="w-4 h-4" />
@@ -2101,19 +2407,18 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
             })()
           )}
 
-          {/* POPUP: TRANSFERIR / TROCAR AULA(S) DE PASTA */}
           {moveModalLessonIds.length > 0 && (
             <div
               onClick={() => setMoveModalLessonIds([])}
-              className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
+              className="fixed inset-0 z-[90] bg-black/75 backdrop-blur-sm flex items-center justify-center p-0 sm:p-4"
             >
               <div
                 onClick={(e) => e.stopPropagation()}
-                className="w-full max-w-md rounded-2xl bg-[#0d1527] border border-white/10 shadow-2xl overflow-hidden flex flex-col max-h-[82vh]"
+                className="h-[100dvh] max-h-[100dvh] w-full rounded-none sm:h-auto sm:max-h-[82dvh] sm:rounded-2xl max-w-md bg-surface border-0 sm:border border-line shadow-pop overflow-hidden flex flex-col"
               >
-                <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between gap-3">
+                <div className="px-5 py-4 border-b border-line flex items-center justify-between gap-3">
                   <div>
-                    <h4 className="text-sm font-bold text-white">
+                    <h4 className="text-sm font-bold text-ink">
                       {moveModalLessonIds.length === 1
                         ? 'Transferir aula para pasta'
                         : `Transferir ${moveModalLessonIds.length} aulas para pasta`}
@@ -2123,7 +2428,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                   <button
                     type="button"
                     onClick={() => setMoveModalLessonIds([])}
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer shrink-0"
+                    className="p-1.5 rounded-lg text-ink-muted hover:text-ink hover:bg-chip-hover transition-colors cursor-pointer shrink-0"
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -2158,28 +2463,27 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                         }}
                         className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl border text-left transition-colors ${
                           isCurrentFolder
-                            ? 'bg-white/5 border-white/5 text-slate-500 cursor-default'
-                            : 'bg-[#0d0b14] hover:bg-[#2563eb]/15 border-white/10 hover:border-[#3b82f6]/60 text-white cursor-pointer'
+                            ? 'bg-chip border-line-soft text-ink-muted cursor-default'
+                            : 'bg-inset hover:bg-brand/15 border-line hover:border-brand-soft/60 text-ink cursor-pointer'
                         }`}
                       >
                         <div className="flex items-center gap-3 min-w-0">
-                          <Folder className="w-4 h-4 text-[#3b82f6] shrink-0" />
+                          <Folder className="w-4 h-4 text-brand-soft shrink-0" />
                           <span className="text-xs font-bold truncate">
                             {folder.name}
                           </span>
                         </div>
                         {isCurrentFolder ? (
-                          <span className="text-[11px] text-slate-500">
+                          <span className="text-[11px] text-ink-muted">
                             Pasta atual
                           </span>
                         ) : (
-                          <ChevronRight className="w-4 h-4 text-blue-300 shrink-0" />
+                          <ChevronRight className="w-4 h-4 text-brand-accent shrink-0" />
                         )}
                       </button>
                     );
                   })}
 
-                  {/* Option to move back out of folder to main Aulas screen */}
                   {selectedLessonFolderId !== null && (
                     <button
                       type="button"
@@ -2199,16 +2503,15 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                           setIsSaving(false);
                         }
                       }}
-                      className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-[#0d0b14] hover:bg-white/5 border border-white/10 text-left text-slate-200 transition-colors cursor-pointer"
+                      className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-inset hover:bg-chip-hover border border-line text-left text-ink-2 transition-colors cursor-pointer"
                     >
                       <span className="text-xs font-semibold truncate">
                         Deixar sem pasta (na tela de Aulas)
                       </span>
-                      <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
+                      <ChevronRight className="w-4 h-4 text-ink-muted shrink-0" />
                     </button>
                   )}
 
-                  {/* Quick inline create new folder & move */}
                   {!isCreatingFolderInMoveModal ? (
                     <button
                       type="button"
@@ -2216,13 +2519,14 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                         setIsCreatingFolderInMoveModal(true);
                         setMoveModalNewFolderName('');
                       }}
-                      className="w-full mt-2 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-dashed border-white/15 text-xs font-bold text-blue-300 hover:text-white transition-colors cursor-pointer"
+                      className="w-full mt-2 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-chip hover:bg-chip-hover border border-dashed border-line-strong text-xs font-bold text-brand-accent hover:text-ink transition-colors cursor-pointer"
                     >
                       <FolderPlus className="w-4 h-4" />
                       <span>Criar nova pasta e mover para cá</span>
                     </button>
                   ) : (
                     <form
+                      noValidate
                       onSubmit={async (e) => {
                         e.preventDefault();
                         if (!moveModalNewFolderName.trim() || isSaving) return;
@@ -2262,7 +2566,6 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                     >
                       <input
                         type="text"
-                        required
                         autoFocus
                         maxLength={120}
                         value={moveModalNewFolderName}
@@ -2270,20 +2573,20 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                           setMoveModalNewFolderName(e.target.value)
                         }
                         placeholder="Nome da nova pasta"
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-xs text-white focus:outline-none focus:border-[#3b82f6]"
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-xs text-ink focus:outline-none focus:border-brand-soft"
                       />
                       <div className="flex items-center justify-end gap-2">
                         <button
                           type="button"
                           onClick={() => setIsCreatingFolderInMoveModal(false)}
-                          className="px-3 py-1.5 rounded-lg bg-white/5 text-slate-300 text-xs font-semibold cursor-pointer"
+                          className="px-3 py-1.5 rounded-lg bg-chip text-ink-2 text-xs font-semibold cursor-pointer"
                         >
                           Cancelar
                         </button>
                         <button
                           type="submit"
                           disabled={isSaving}
-                          className="px-3.5 py-1.5 rounded-lg bg-[#2563eb] text-white text-xs font-bold cursor-pointer"
+                          className="px-3.5 py-1.5 rounded-lg bg-brand text-white text-xs font-bold cursor-pointer"
                         >
                           Criar e Mover
                         </button>
@@ -2297,17 +2600,17 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
         </div>
       )}
 
-      {/* TAB 2: PLAYLISTS — LIST OF CREATED PLAYLISTS + CLEAN SCREEN FOR CREATE/EDIT */}
+      {/* TAB 2: PLAYLISTS */}
       {activeTab === 'playlists' && (
         <div className="space-y-4">
           {!isPlaylistFormOpen ? (
             <>
               <div className="flex items-center justify-between gap-4">
-                <h2 className="text-base font-bold text-white">Playlists</h2>
+                <h2 className="text-base font-bold text-ink">Playlists</h2>
                 <button
                   type="button"
                   onClick={openNewPlaylistWindow}
-                  className="px-4 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold flex items-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold flex items-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <Plus className="w-4 h-4" />
                   Nova Playlist
@@ -2318,10 +2621,10 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                 {regularPlaylists.map((pl) => (
                   <div
                     key={pl.id}
-                    className="flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-[#141220] border border-white/10"
+                    className="cv-auto-row flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-surface border border-line shadow-card"
                   >
                     <div className="flex items-center gap-3.5 min-w-0">
-                      <div className="w-14 aspect-[3/4] rounded-xl overflow-hidden shrink-0 border border-white/10">
+                      <div className="w-14 aspect-[3/4] rounded-xl overflow-hidden shrink-0 border border-line">
                         <CoverArtwork
                           src={pl.coverUrl}
                           title={pl.title}
@@ -2330,8 +2633,10 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                         />
                       </div>
                       <div className="min-w-0">
-                        <h4 className="text-sm font-bold text-white truncate">{pl.title}</h4>
-                        <p className="text-xs text-slate-400 mt-1 font-mono tabular-nums">
+                        <h4 className="text-sm font-bold text-ink truncate">
+                          {pl.title}
+                        </h4>
+                        <p className="text-xs text-ink-muted mt-1 font-mono tabular-nums">
                           {pl.lessonIds?.length || 0} aulas
                         </p>
                       </div>
@@ -2341,7 +2646,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                       <button
                         type="button"
                         onClick={() => openEditPlaylistWindow(pl)}
-                        className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                        className="p-2 rounded-lg text-ink-2 hover:text-ink hover:bg-chip-hover transition-colors cursor-pointer"
                         title="Editar playlist"
                       >
                         <Edit3 className="w-4 h-4" />
@@ -2349,7 +2654,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                       <button
                         type="button"
                         onClick={() => onDeletePlaylist(pl.id)}
-                        className="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                        className="p-2 rounded-lg text-ink-muted hover:text-rose-500 hover:bg-rose-500/10 transition-colors cursor-pointer"
                         title="Excluir playlist"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -2361,36 +2666,49 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
             </>
           ) : (
             <form
+              noValidate
               onSubmit={handlePlaylistSubmit}
-              className="max-w-xl space-y-5 pt-1"
+              className="max-w-xl space-y-5 pt-1 pb-24 sm:pb-6"
             >
               <div className="flex items-center justify-between">
                 <button
                   type="button"
                   onClick={closePlaylistWindow}
-                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-300 hover:text-white cursor-pointer"
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink-2 hover:text-ink cursor-pointer"
                 >
-                  <ArrowLeft className="w-4 h-4 text-[#3b82f6]" />
+                  <ArrowLeft className="w-4 h-4 text-brand-soft" />
                   Voltar
                 </button>
-                <h3 className="text-sm font-bold text-white">
+                <h3 className="text-sm font-bold text-ink">
                   {editingPlaylistId ? 'Editar Playlist' : 'Nova Playlist'}
                 </h3>
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                <label className="block text-xs font-medium text-ink-2 mb-1.5">
                   Nome da playlist
                 </label>
                 <input
+                  ref={playlistTitleRef}
                   type="text"
-                  required
                   maxLength={SCHEMA_LIMITS.TITLE_MAX}
                   value={playlistTitle}
-                  onChange={(e) => setPlaylistTitle(e.target.value)}
+                  onChange={(e) => {
+                    setPlaylistTitle(e.target.value);
+                    if (playlistTitleError) setPlaylistTitleError(null);
+                  }}
                   placeholder="Digite o nome da playlist"
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-sm text-white focus:outline-none focus:border-[#3b82f6]"
+                  className={`w-full px-3.5 py-2.5 rounded-xl bg-inset border text-sm text-ink focus:outline-none ${
+                    playlistTitleError
+                      ? 'border-danger focus:border-danger'
+                      : 'border-line focus:border-brand-soft'
+                  }`}
                 />
+                {playlistTitleError && (
+                  <p className="text-xs font-medium text-danger mt-1">
+                    {playlistTitleError}
+                  </p>
+                )}
               </div>
 
               <CleanCoverInput
@@ -2413,18 +2731,18 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                 maxItems={SCHEMA_LIMITS.MAX_LESSON_IDS}
               />
 
-              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-white/10">
+              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-line">
                 <button
                   type="button"
                   onClick={closePlaylistWindow}
-                  className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-semibold transition-colors cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-chip hover:bg-chip-hover text-ink-2 text-xs font-semibold transition-colors cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={isSaving}
-                  className="px-5 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
+                  className="px-5 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
                 >
                   Salvar Playlist
                 </button>
@@ -2434,17 +2752,17 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
         </div>
       )}
 
-      {/* TAB 3: CURSOS — INCLUDES "AULAS GRÁTIS" MODULE + CREATED COURSES + "NOVO CURSO" BUTTON */}
+      {/* TAB 3: CURSOS */}
       {activeTab === 'courses' && (
         <div className="space-y-4">
           {!isCourseFormOpen && !isFreeModuleFormOpen ? (
             <>
               <div className="flex items-center justify-between gap-4">
-                <h2 className="text-base font-bold text-white">Cursos</h2>
+                <h2 className="text-base font-bold text-ink">Cursos</h2>
                 <button
                   type="button"
                   onClick={openNewCourseWindow}
-                  className="px-4 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold flex items-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold flex items-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <Plus className="w-4 h-4" />
                   Novo Curso
@@ -2452,10 +2770,9 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-                {/* DEDICATED "AULAS GRÁTIS" MODULE CARD INSIDE CURSOS */}
-                <div className="flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-[#0f1b33] border border-[#3b82f6]/40">
+                <div className="flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-surface-2 border border-brand-soft/40 shadow-card">
                   <div className="flex items-center gap-3.5 min-w-0">
-                    <div className="w-14 aspect-[2/3] rounded-xl overflow-hidden shrink-0 border border-white/15">
+                    <div className="w-14 aspect-[2/3] rounded-xl overflow-hidden shrink-0 border border-line">
                       <CoverArtwork
                         src={freeCourse?.coverUrl || 'preset:mastery'}
                         title="Aulas Grátis"
@@ -2464,10 +2781,10 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                       />
                     </div>
                     <div className="min-w-0">
-                      <h4 className="text-sm font-bold text-white truncate">
+                      <h4 className="text-sm font-bold text-ink truncate">
                         Aulas Grátis
                       </h4>
-                      <p className="text-xs text-blue-300 mt-1 font-mono tabular-nums">
+                      <p className="text-xs text-brand-accent mt-1 font-mono tabular-nums">
                         {resolvedFreeLessonIds.length} aulas gratuitas
                       </p>
                     </div>
@@ -2476,21 +2793,20 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                   <button
                     type="button"
                     onClick={openFreeModuleWindow}
-                    className="p-2 rounded-lg text-blue-200 hover:text-white hover:bg-white/10 transition-colors shrink-0 cursor-pointer"
+                    className="p-2 rounded-lg text-brand-accent hover:text-ink hover:bg-chip-hover transition-colors shrink-0 cursor-pointer"
                     title="Configurar Aulas Grátis"
                   >
                     <Edit3 className="w-4 h-4" />
                   </button>
                 </div>
 
-                {/* REGULAR COURSES */}
                 {regularCourses.map((course) => (
                   <div
                     key={course.id}
-                    className="flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-[#141220] border border-white/10"
+                    className="cv-auto-row flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-surface border border-line shadow-card"
                   >
                     <div className="flex items-center gap-3.5 min-w-0">
-                      <div className="w-14 aspect-[2/3] rounded-xl overflow-hidden shrink-0 border border-white/10">
+                      <div className="w-14 aspect-[2/3] rounded-xl overflow-hidden shrink-0 border border-line">
                         <CoverArtwork
                           src={course.coverUrl}
                           title={course.title}
@@ -2499,8 +2815,10 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                         />
                       </div>
                       <div className="min-w-0">
-                        <h4 className="text-sm font-bold text-white truncate">{course.title}</h4>
-                        <p className="text-xs text-slate-400 mt-1 font-mono tabular-nums">
+                        <h4 className="text-sm font-bold text-ink truncate">
+                          {course.title}
+                        </h4>
+                        <p className="text-xs text-ink-muted mt-1 font-mono tabular-nums">
                           {course.playlistIds?.length || 0} playlists
                         </p>
                       </div>
@@ -2510,7 +2828,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                       <button
                         type="button"
                         onClick={() => openEditCourseWindow(course)}
-                        className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                        className="p-2 rounded-lg text-ink-2 hover:text-ink hover:bg-chip-hover transition-colors cursor-pointer"
                         title="Editar curso"
                       >
                         <Edit3 className="w-4 h-4" />
@@ -2518,7 +2836,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                       <button
                         type="button"
                         onClick={() => onDeleteCourse(course.id)}
-                        className="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                        className="p-2 rounded-lg text-ink-muted hover:text-rose-500 hover:bg-rose-500/10 transition-colors cursor-pointer"
                         title="Excluir curso"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -2529,32 +2847,32 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
               </div>
             </>
           ) : isFreeModuleFormOpen ? (
-            /* CONFIGURE "AULAS GRÁTIS" MODULE WINDOW */
             <form
+              noValidate
               onSubmit={handleFreeModuleSubmit}
-              className="max-w-xl space-y-5 pt-1"
+              className="max-w-xl space-y-5 pt-1 pb-24 sm:pb-6"
             >
               <div className="flex items-center justify-between gap-2">
                 <button
                   type="button"
                   onClick={closeCourseWindow}
-                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-300 hover:text-white cursor-pointer"
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink-2 hover:text-ink cursor-pointer"
                 >
-                  <ArrowLeft className="w-4 h-4 text-[#3b82f6]" />
+                  <ArrowLeft className="w-4 h-4 text-brand-soft" />
                   Voltar
                 </button>
 
                 <button
                   type="button"
                   onClick={() => onOpenNewLessonModal(true)}
-                  className="px-3.5 py-1.5 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                  className="px-3.5 py-1.5 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   Criar Aula Gratuita
                 </button>
               </div>
 
-              <h3 className="text-sm font-bold text-white">Aulas Grátis</h3>
+              <h3 className="text-sm font-bold text-ink">Aulas Grátis</h3>
 
               <CleanCoverInput
                 label="Imagem da capa"
@@ -2576,56 +2894,68 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                 maxItems={SCHEMA_LIMITS.MAX_LESSON_IDS}
               />
 
-              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-white/10">
+              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-line">
                 <button
                   type="button"
                   onClick={closeCourseWindow}
-                  className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-semibold transition-colors cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-chip hover:bg-chip-hover text-ink-2 text-xs font-semibold transition-colors cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={isSaving}
-                  className="px-5 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
+                  className="px-5 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
                 >
                   Salvar Aulas Grátis
                 </button>
               </div>
             </form>
           ) : (
-            /* CREATE / EDIT REGULAR COURSE WINDOW */
             <form
+              noValidate
               onSubmit={handleCourseSubmit}
-              className="max-w-xl space-y-5 pt-1"
+              className="max-w-xl space-y-5 pt-1 pb-24 sm:pb-6"
             >
               <div className="flex items-center justify-between">
                 <button
                   type="button"
                   onClick={closeCourseWindow}
-                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-300 hover:text-white cursor-pointer"
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink-2 hover:text-ink cursor-pointer"
                 >
-                  <ArrowLeft className="w-4 h-4 text-[#3b82f6]" />
+                  <ArrowLeft className="w-4 h-4 text-brand-soft" />
                   Voltar
                 </button>
-                <h3 className="text-sm font-bold text-white">
+                <h3 className="text-sm font-bold text-ink">
                   {editingCourseId ? 'Editar Curso' : 'Novo Curso'}
                 </h3>
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                <label className="block text-xs font-medium text-ink-2 mb-1.5">
                   Nome do curso
                 </label>
                 <input
+                  ref={courseTitleRef}
                   type="text"
-                  required
                   maxLength={SCHEMA_LIMITS.TITLE_MAX}
                   value={courseTitle}
-                  onChange={(e) => setCourseTitle(e.target.value)}
+                  onChange={(e) => {
+                    setCourseTitle(e.target.value);
+                    if (courseTitleError) setCourseTitleError(null);
+                  }}
                   placeholder="Digite o nome do curso"
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-sm text-white focus:outline-none focus:border-[#3b82f6]"
+                  className={`w-full px-3.5 py-2.5 rounded-xl bg-inset border text-sm text-ink focus:outline-none ${
+                    courseTitleError
+                      ? 'border-danger focus:border-danger'
+                      : 'border-line focus:border-brand-soft'
+                  }`}
                 />
+                {courseTitleError && (
+                  <p className="text-xs font-medium text-danger mt-1">
+                    {courseTitleError}
+                  </p>
+                )}
               </div>
 
               <CleanCoverInput
@@ -2655,14 +2985,14 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                 <button
                   type="button"
                   onClick={closeCourseWindow}
-                  className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-semibold transition-colors cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-chip hover:bg-chip-hover text-ink-2 text-xs font-semibold transition-colors cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={isSaving}
-                  className="px-5 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
+                  className="px-5 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
                 >
                   Salvar Curso
                 </button>
@@ -2672,47 +3002,59 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
         </div>
       )}
 
-      {/* TAB 4A: TURMAS — CREATE, EDIT, DELETE TURMAS, LIBERATE COURSES PER TURMA & MANAGE/TRANSFER STUDENTS */}
+      {/* TAB 4A: TURMAS */}
       {activeTab === 'turmas' && (
         <div className="space-y-4">
           {isTurmaFormOpen ? (
-            /* CREATE / EDIT TURMA FORM */
             <form
+              noValidate
               onSubmit={handleTurmaSubmit}
-              className="max-w-2xl p-6 rounded-2xl bg-[#141220] border border-white/10 space-y-5"
+              className="max-w-2xl p-6 rounded-2xl bg-surface border border-line shadow-card space-y-5"
             >
               <div className="flex items-center justify-between gap-2">
                 <button
                   type="button"
                   onClick={closeTurmaForm}
-                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-300 hover:text-white cursor-pointer"
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink-2 hover:text-ink cursor-pointer"
                 >
-                  <ArrowLeft className="w-4 h-4 text-[#3b82f6]" />
+                  <ArrowLeft className="w-4 h-4 text-brand-soft" />
                   Voltar
                 </button>
-                <h3 className="text-sm font-bold text-white">
+                <h3 className="text-sm font-bold text-ink">
                   {editingTurmaId ? 'Editar Turma' : 'Nova Turma'}
                 </h3>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                  <label className="block text-xs font-medium text-ink-2 mb-1.5">
                     Nome da Turma
                   </label>
                   <input
+                    ref={turmaNameRef}
                     type="text"
-                    required
                     maxLength={120}
                     value={turmaName}
-                    onChange={(e) => setTurmaName(e.target.value)}
+                    onChange={(e) => {
+                      setTurmaName(e.target.value);
+                      if (turmaNameError) setTurmaNameError(null);
+                    }}
                     placeholder="Ex: Turma Medicina 2026"
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-sm text-white focus:outline-none focus:border-[#3b82f6]"
+                    className={`w-full px-3.5 py-2.5 rounded-xl bg-inset border text-sm text-ink focus:outline-none ${
+                      turmaNameError
+                        ? 'border-danger focus:border-danger'
+                        : 'border-line focus:border-brand-soft'
+                    }`}
                   />
+                  {turmaNameError && (
+                    <p className="text-xs font-medium text-danger mt-1">
+                      {turmaNameError}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                  <label className="block text-xs font-medium text-ink-2 mb-1.5">
                     Descrição / Observação (opcional)
                   </label>
                   <input
@@ -2721,18 +3063,17 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                     value={turmaDescription}
                     onChange={(e) => setTurmaDescription(e.target.value)}
                     placeholder="Ex: Turno Manhã / Extensivo Enem"
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-sm text-white focus:outline-none focus:border-[#3b82f6]"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
                   />
                 </div>
               </div>
 
-              {/* COURSES LIBERATED FOR THIS TURMA */}
               <div className="space-y-2.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-xs font-bold text-white">
+                  <span className="text-xs font-bold text-ink">
                     Cursos liberados nesta Turma
                   </span>
-                  <label className="inline-flex items-center gap-2 text-xs font-semibold text-blue-300 cursor-pointer select-none">
+                  <label className="inline-flex items-center gap-2 text-xs font-semibold text-brand-accent cursor-pointer select-none">
                     <input
                       type="checkbox"
                       checked={turmaAccessAll}
@@ -2750,11 +3091,11 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                 </div>
 
                 {regularCourses.length === 0 ? (
-                  <p className="text-xs text-slate-400 p-3 rounded-xl bg-[#0d0b14] border border-white/10">
+                  <p className="text-xs text-ink-muted p-3 rounded-xl bg-inset border border-line">
                     Nenhum curso cadastrado ainda.
                   </p>
                 ) : (
-                  <div className="p-3 rounded-xl bg-[#0d0b14] border border-white/10 grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-60 overflow-y-auto">
+                  <div className="p-3 rounded-xl bg-inset border border-line grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-60 overflow-y-auto">
                     {regularCourses.map((c) => {
                       const checked =
                         turmaAccessAll || turmaCourseIds.includes(c.id);
@@ -2785,16 +3126,16 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                           }}
                           className={`flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
                             checked
-                              ? 'bg-[#2563eb]/25 border border-[#3b82f6]/50 text-white'
-                              : 'bg-[#141220] border border-white/5 text-slate-400 hover:text-white'
+                              ? 'bg-brand/20 border border-brand-soft/50 text-ink'
+                              : 'bg-surface border border-line-soft text-ink-muted hover:text-ink'
                           }`}
                         >
                           <span className="truncate">{c.title}</span>
                           <span
                             className={`px-2 py-0.5 rounded text-[10px] font-bold shrink-0 ${
                               checked
-                                ? 'bg-emerald-500/20 text-emerald-300'
-                                : 'bg-white/5 text-slate-500'
+                                ? 'bg-emerald-500/20 text-emerald-500'
+                                : 'bg-chip text-ink-muted'
                             }`}
                           >
                             {checked ? 'Liberado' : 'Bloqueado'}
@@ -2810,21 +3151,20 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                 <button
                   type="button"
                   onClick={closeTurmaForm}
-                  className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-semibold transition-colors cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-chip hover:bg-chip-hover text-ink-2 text-xs font-semibold transition-colors cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={isSaving}
-                  className="px-5 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
+                  className="px-5 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
                 >
                   {isSaving ? 'Salvando...' : 'Salvar Turma'}
                 </button>
               </div>
             </form>
           ) : selectedTurmaId && turmas.some((t) => t.id === selectedTurmaId) ? (
-            /* DETAILED VIEW OF A SELECTED TURMA (READ-ONLY STUDENT LIST) */
             (() => {
               const activeTurma = turmas.find((t) => t.id === selectedTurmaId)!;
               const turmaStudents = students.filter(
@@ -2837,23 +3177,23 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                     <button
                       type="button"
                       onClick={() => setSelectedTurmaId(null)}
-                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-300 hover:text-white cursor-pointer shrink-0"
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink-2 hover:text-ink cursor-pointer shrink-0"
                     >
-                      <ArrowLeft className="w-4 h-4 text-[#3b82f6]" />
+                      <ArrowLeft className="w-4 h-4 text-brand-soft" />
                       <span>Voltar</span>
                     </button>
-                    <span className="text-slate-600">/</span>
-                    <h3 className="text-sm font-bold text-white truncate">
+                    <span className="text-ink-faint">/</span>
+                    <h3 className="text-sm font-bold text-ink truncate">
                       Alunos da Turma ({turmaStudents.length})
                     </h3>
                   </div>
 
                   {turmaStudents.length === 0 ? (
-                    <div className="p-8 rounded-2xl bg-[#141220] border border-white/10 text-center space-y-1">
-                      <p className="text-sm font-bold text-white">
+                    <div className="p-8 rounded-2xl bg-surface border border-line text-center space-y-1">
+                      <p className="text-sm font-bold text-ink">
                         Nenhum aluno nesta turma ainda
                       </p>
-                      <p className="text-xs text-slate-400">
+                      <p className="text-xs text-ink-muted">
                         Vincule ou troque a turma dos alunos na aba Alunos.
                       </p>
                     </div>
@@ -2864,26 +3204,26 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                         return (
                           <div
                             key={stu.id}
-                            className="flex items-center justify-between gap-3 p-4 rounded-2xl bg-[#141220] border border-white/10"
+                            className="cv-auto-row flex items-center justify-between gap-3 p-4 rounded-2xl bg-surface border border-line shadow-card"
                           >
                             <div className="min-w-0 space-y-1">
                               <div className="flex items-center gap-2">
-                                <h4 className="text-xs font-bold text-white truncate">
+                                <h4 className="text-xs font-bold text-ink truncate">
                                   {stu.name}
                                 </h4>
                                 {simCount > 0 && (
-                                  <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 text-[10px] font-bold font-mono shrink-0">
+                                  <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-500 text-[10px] font-bold font-mono shrink-0">
                                     {simCount} simulado
                                     {simCount > 1 ? 's' : ''} salvo
                                     {simCount > 1 ? 's' : ''}
                                   </span>
                                 )}
                               </div>
-                              <p className="text-[11px] text-slate-400 truncate">
+                              <p className="text-[11px] text-ink-muted truncate">
                                 {stu.email}
                               </p>
                               {(stu.cpf || stu.phone) && (
-                                <p className="text-[11px] text-slate-400/90 truncate tabular-nums">
+                                <p className="text-[11px] text-ink-muted truncate tabular-nums">
                                   {stu.cpf ? `CPF: ${stu.cpf}` : ''}
                                   {stu.cpf && stu.phone ? ' • ' : ''}
                                   {stu.phone ? `Tel: ${stu.phone}` : ''}
@@ -2899,19 +3239,18 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
               );
             })()
           ) : (
-            /* TURMAS OVERVIEW LIST */
             <>
               <div className="flex items-center justify-between gap-4">
                 <div>
-                  <h2 className="text-base font-bold text-white">Turmas</h2>
-                  <p className="text-xs text-slate-400">
+                  <h2 className="text-base font-bold text-ink">Turmas</h2>
+                  <p className="text-xs text-ink-muted">
                     Crie turmas e libere cursos para toda a turma de uma só vez.
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={openNewTurmaForm}
-                  className="px-4 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold flex items-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold flex items-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <Plus className="w-4 h-4" />
                   Nova Turma
@@ -2919,11 +3258,11 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
               </div>
 
               {turmas.length === 0 ? (
-                <div className="p-8 rounded-2xl bg-[#141220] border border-white/10 text-center space-y-2">
-                  <p className="text-sm font-bold text-white">
+                <div className="p-8 rounded-2xl bg-surface border border-line text-center space-y-2">
+                  <p className="text-sm font-bold text-ink">
                     Nenhuma turma criada ainda
                   </p>
-                  <p className="text-xs text-slate-400">
+                  <p className="text-xs text-ink-muted">
                     Clique em &ldquo;Nova Turma&rdquo; para criar uma turma e
                     definir os cursos liberados.
                   </p>
@@ -2943,31 +3282,31 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                       <div
                         key={turma.id}
                         onClick={() => setSelectedTurmaId(turma.id)}
-                        className="p-4 rounded-2xl bg-[#141220] border border-white/10 hover:border-[#3b82f6]/60 transition-all flex flex-col justify-between gap-4 cursor-pointer"
+                        className="cv-auto-row p-4 rounded-2xl bg-surface border border-line hover:border-brand-soft/60 shadow-card transition-all flex flex-col justify-between gap-4 cursor-pointer"
                       >
                         <div className="space-y-1.5">
                           <div className="flex items-center justify-between gap-2">
                             <div className="flex items-center gap-2 min-w-0">
-                              <div className="w-8 h-8 rounded-xl bg-[#2563eb]/20 text-blue-300 flex items-center justify-center shrink-0">
+                              <div className="w-8 h-8 rounded-xl bg-brand/15 text-brand-accent flex items-center justify-center shrink-0">
                                 <GraduationCap className="w-4 h-4" />
                               </div>
-                              <h3 className="text-sm font-extrabold text-white truncate">
+                              <h3 className="text-sm font-extrabold text-ink truncate">
                                 {turma.name}
                               </h3>
                             </div>
 
-                            <span className="px-2.5 py-1 rounded-lg bg-white/5 text-slate-200 text-xs font-bold font-mono shrink-0">
+                            <span className="px-2.5 py-1 rounded-lg bg-chip text-ink-2 text-xs font-bold font-mono shrink-0">
                               {memberCount} aluno{memberCount !== 1 ? 's' : ''}
                             </span>
                           </div>
 
                           {turma.description && (
-                            <p className="text-xs text-slate-400 line-clamp-1">
+                            <p className="text-xs text-ink-muted line-clamp-1">
                               {turma.description}
                             </p>
                           )}
 
-                          <p className="text-xs font-semibold text-blue-300 pt-1">
+                          <p className="text-xs font-semibold text-brand-accent pt-1">
                             {turma.accessAll
                               ? 'Todos os cursos liberados'
                               : liberatedCourses.length > 0
@@ -2976,7 +3315,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                           </p>
                         </div>
 
-                        <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-white/10">
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-line">
                           <div className="flex items-center gap-2">
                             <button
                               type="button"
@@ -2984,7 +3323,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                                 e.stopPropagation();
                                 setSelectedTurmaId(turma.id);
                               }}
-                              className="px-3 py-1.5 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold transition-colors cursor-pointer"
+                              className="px-3 py-1.5 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold transition-colors cursor-pointer"
                             >
                               Alunos da Turma
                             </button>
@@ -2997,7 +3336,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                                 e.stopPropagation();
                                 openEditTurmaForm(turma);
                               }}
-                              className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                              className="p-2 rounded-lg text-ink-2 hover:text-ink hover:bg-chip-hover transition-colors cursor-pointer"
                               title="Editar turma"
                             >
                               <Edit3 className="w-4 h-4" />
@@ -3009,7 +3348,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                                 e.stopPropagation();
                                 onDeleteTurma(turma.id);
                               }}
-                              className="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                              className="p-2 rounded-lg text-ink-muted hover:text-rose-500 hover:bg-rose-500/10 transition-colors cursor-pointer"
                               title="Excluir turma"
                             >
                               <Trash2 className="w-4 h-4" />
@@ -3030,18 +3369,17 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
       {activeTab === 'students' && (
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-4">
-            <h2 className="text-base font-bold text-white">Alunos</h2>
+            <h2 className="text-base font-bold text-ink">Alunos</h2>
             <button
               type="button"
               onClick={openNewStudentPopup}
-              className="px-4 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold flex items-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer"
+              className="px-4 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold flex items-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Plus className="w-4 h-4" />
               Cadastrar Aluno
             </button>
           </div>
 
-          {/* FILTER STUDENTS BY TURMA */}
           {turmas.length > 0 && (
             <div className="flex items-center gap-2 overflow-x-auto pb-1">
               <button
@@ -3049,8 +3387,8 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                 onClick={() => setStudentTurmaFilter('ALL')}
                 className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-colors cursor-pointer ${
                   studentTurmaFilter === 'ALL'
-                    ? 'bg-[#2563eb] text-white'
-                    : 'bg-[#141220] border border-white/10 text-slate-400 hover:text-white'
+                    ? 'bg-brand text-white'
+                    : 'bg-surface border border-line text-ink-muted hover:text-ink'
                 }`}
               >
                 Todos ({students.length})
@@ -3061,8 +3399,8 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                 onClick={() => setStudentTurmaFilter('NONE')}
                 className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-colors cursor-pointer ${
                   studentTurmaFilter === 'NONE'
-                    ? 'bg-[#2563eb] text-white'
-                    : 'bg-[#141220] border border-white/10 text-slate-400 hover:text-white'
+                    ? 'bg-brand text-white'
+                    : 'bg-surface border border-line text-ink-muted hover:text-ink'
                 }`}
               >
                 Sem Turma ({students.filter((s) => !s.turmaId).length})
@@ -3077,8 +3415,8 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                     onClick={() => setStudentTurmaFilter(t.id)}
                     className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-colors cursor-pointer ${
                       studentTurmaFilter === t.id
-                        ? 'bg-[#2563eb] text-white'
-                        : 'bg-[#141220] border border-white/10 text-slate-400 hover:text-white'
+                        ? 'bg-brand text-white'
+                        : 'bg-surface border border-line text-ink-muted hover:text-ink'
                     }`}
                   >
                     {t.name} ({count})
@@ -3089,12 +3427,12 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
           )}
 
           {students.length === 0 ? (
-            <div className="p-8 rounded-2xl bg-[#141220] border border-white/10 text-center space-y-2">
-              <p className="text-sm font-bold text-white">
+            <div className="p-8 rounded-2xl bg-surface border border-line text-center space-y-2">
+              <p className="text-sm font-bold text-ink">
                 Nenhum aluno cadastrado ainda
               </p>
-              <p className="text-xs text-slate-400">
-                Clique em &ldquo;Novo Aluno&rdquo; acima para cadastrar um aluno.
+              <p className="text-xs text-ink-muted">
+                Clique em &ldquo;Cadastrar Aluno&rdquo; acima para cadastrar um aluno.
               </p>
             </div>
           ) : (
@@ -3120,33 +3458,33 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                     <div
                       key={stu.id}
                       onClick={() => openEditStudentCoursesPopup(stu)}
-                      className="flex items-center justify-between gap-3 p-4 rounded-2xl bg-[#141220] border border-white/10 hover:border-[#3b82f6]/60 transition-colors cursor-pointer"
+                      className="cv-auto-row flex items-center justify-between gap-3 p-4 rounded-2xl bg-surface border border-line hover:border-brand-soft/60 shadow-card transition-colors cursor-pointer"
                     >
                       <div className="min-w-0 space-y-0.5">
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <h4 className="text-xs font-bold text-white truncate">
+                          <h4 className="text-xs font-bold text-ink truncate">
                             {stu.name}
                           </h4>
                           <span
                             className={`px-2 py-0.5 rounded text-[10px] font-bold shrink-0 ${
                               stuTurma
-                                ? 'bg-[#2563eb]/25 text-blue-200 border border-[#3b82f6]/40'
-                                : 'bg-white/5 text-slate-400'
+                                ? 'bg-brand/15 text-brand-accent border border-brand-soft/40'
+                                : 'bg-chip text-ink-muted'
                             }`}
                           >
                             {stuTurma ? `Turma: ${stuTurma.name}` : 'Sem turma'}
                           </span>
                           {simCount > 0 && (
-                            <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 text-[10px] font-bold font-mono shrink-0">
+                            <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-500 text-[10px] font-bold font-mono shrink-0">
                               {simCount} simulado{simCount > 1 ? 's' : ''}
                             </span>
                           )}
                         </div>
-                        <p className="text-[11px] text-slate-400 truncate">
+                        <p className="text-[11px] text-ink-muted truncate">
                           {stu.email}
                         </p>
                         {(stu.cpf || stu.phone || stu.birthDate) && (
-                          <p className="text-[11px] text-slate-400/90 truncate tabular-nums">
+                          <p className="text-[11px] text-ink-muted truncate tabular-nums">
                             {[
                               stu.cpf ? `CPF: ${stu.cpf}` : '',
                               stu.phone ? `Tel: ${stu.phone}` : '',
@@ -3158,7 +3496,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                               .join(' • ')}
                           </p>
                         )}
-                        <p className="text-[11px] font-semibold text-blue-300 truncate pt-0.5">
+                        <p className="text-[11px] font-semibold text-brand-accent truncate pt-0.5">
                           {!stuTurma
                             ? 'Sem turma — Nenhum curso liberado (Teste Grátis)'
                             : isAll
@@ -3177,7 +3515,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                               e.stopPropagation();
                               openTransferStudentModal(stu);
                             }}
-                            className="p-2 rounded-lg bg-white/5 hover:bg-[#2563eb]/25 text-blue-300 transition-colors cursor-pointer"
+                            className="p-2 rounded-lg bg-chip hover:bg-brand/20 text-brand-accent transition-colors cursor-pointer"
                             title="Transferir aluno de turma (mantém simulados salvos)"
                           >
                             <ArrowRightLeft className="w-3.5 h-3.5" />
@@ -3191,8 +3529,8 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                           }}
                           className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer ${
                             hasAnyLiberated
-                              ? 'bg-emerald-500/15 text-emerald-300'
-                              : 'bg-rose-500/15 text-rose-300'
+                              ? 'bg-emerald-500/15 text-emerald-500'
+                              : 'bg-rose-500/15 text-rose-500'
                           }`}
                         >
                           {hasAnyLiberated ? 'Ativo' : 'Bloqueado'}
@@ -3203,7 +3541,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                             e.stopPropagation();
                             onDeleteStudent(stu.id);
                           }}
-                          className="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                          className="p-2 rounded-lg text-ink-muted hover:text-rose-500 hover:bg-rose-500/10 transition-colors cursor-pointer"
                           title="Excluir aluno"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -3217,41 +3555,42 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
         </div>
       )}
 
-      {/* SHARED POPUP: TRANSFER A STUDENT BETWEEN TURMAS (PRESERVING SIMULADOS) */}
+      {/* SHARED POPUP: TRANSFER A STUDENT BETWEEN TURMAS */}
       {transferringStudent && (
         <div
           onClick={() => setTransferringStudent(null)}
-          className="fixed inset-0 z-[70] bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 pb-20 md:pb-6"
+          className="fixed inset-0 z-[90] bg-black/75 backdrop-blur-sm flex items-center justify-center p-0 sm:p-4"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md max-h-[calc(100dvh-6rem)] md:max-h-[85vh] rounded-3xl bg-[#141220] border border-white/10 shadow-2xl overflow-hidden flex flex-col"
+            className="h-[100dvh] max-h-[100dvh] w-full rounded-none sm:h-auto sm:max-h-[85dvh] sm:rounded-3xl max-w-md bg-surface border-0 sm:border border-line shadow-pop overflow-hidden flex flex-col"
           >
-            <div className="shrink-0 px-5 py-4 border-b border-white/10 flex items-center justify-between gap-3">
+            <div className="shrink-0 px-5 py-4 border-b border-line flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <h3 className="text-base font-extrabold tracking-tight text-white truncate">
+                <h3 className="text-base font-extrabold tracking-tight text-ink truncate">
                   Transferir Aluno de Turma
                 </h3>
-                <p className="text-xs text-slate-400 truncate">
+                <p className="text-xs text-ink-muted truncate">
                   {transferringStudent.name} ({transferringStudent.email})
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setTransferringStudent(null)}
-                className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                className="p-2 rounded-xl text-ink-muted hover:text-ink hover:bg-chip-hover transition-colors cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <form
+              noValidate
               onSubmit={handleConfirmTransferStudent}
               className="flex-1 flex flex-col min-h-0"
             >
               <div className="flex-1 overflow-y-auto p-5 space-y-4">
                 <div className="space-y-2">
-                  <label className="block text-xs font-semibold text-slate-300">
+                  <label className="block text-xs font-semibold text-ink-2">
                     Selecione a turma de destino:
                   </label>
 
@@ -3261,13 +3600,13 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                       onClick={() => setTransferTargetTurmaId('')}
                       className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold border transition-colors cursor-pointer ${
                         transferTargetTurmaId === ''
-                          ? 'bg-[#2563eb]/25 border-[#3b82f6] text-white'
-                          : 'bg-[#0d0b14] border-white/10 text-slate-400 hover:text-white'
+                          ? 'bg-brand/20 border-brand-soft text-ink'
+                          : 'bg-inset border-line text-ink-muted hover:text-ink'
                       }`}
                     >
                       <span>Sem turma (remover de turma)</span>
                       {transferTargetTurmaId === '' && (
-                        <Check className="w-4 h-4 text-blue-300" />
+                        <Check className="w-4 h-4 text-brand-accent" />
                       )}
                     </button>
 
@@ -3285,22 +3624,22 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                           onClick={() => setTransferTargetTurmaId(t.id)}
                           className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold border transition-colors cursor-pointer ${
                             isSelected
-                              ? 'bg-[#2563eb]/25 border-[#3b82f6] text-white'
-                              : 'bg-[#0d0b14] border-white/10 text-slate-300 hover:text-white'
+                              ? 'bg-brand/20 border-brand-soft text-ink'
+                              : 'bg-inset border-line text-ink-2 hover:text-ink'
                           }`}
                         >
                           <div className="text-left min-w-0">
                             <span className="block font-bold truncate">
                               {t.name}
                             </span>
-                            <span className="block text-[10px] text-blue-300">
+                            <span className="block text-[10px] text-brand-accent">
                               {t.accessAll
                                 ? 'Todos os cursos liberados'
                                 : `${libCount} curso${libCount !== 1 ? 's' : ''} liberado${libCount !== 1 ? 's' : ''}`}
                             </span>
                           </div>
                           {isSelected && (
-                            <Check className="w-4 h-4 text-blue-300 shrink-0" />
+                            <Check className="w-4 h-4 text-brand-accent shrink-0" />
                           )}
                         </button>
                       );
@@ -3309,18 +3648,18 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                 </div>
               </div>
 
-              <div className="shrink-0 px-5 py-3.5 border-t border-white/10 bg-[#141220] flex items-center justify-end gap-2.5">
+              <div className="shrink-0 px-5 py-3.5 border-t border-line bg-surface flex items-center justify-end gap-2.5">
                 <button
                   type="button"
                   onClick={() => setTransferringStudent(null)}
-                  className="px-4 py-2.5 rounded-full bg-white/5 hover:bg-white/10 text-xs font-bold text-slate-300 transition-colors cursor-pointer"
+                  className="px-4 py-2.5 rounded-full bg-chip hover:bg-chip-hover text-xs font-bold text-ink-2 transition-colors cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={isSaving}
-                  className="px-6 py-2.5 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold shadow-[0_6px_24px_rgba(37,99,235,0.45)] transition-all disabled:opacity-50 cursor-pointer"
+                  className="px-6 py-2.5 rounded-full bg-brand hover:bg-brand-hover text-white text-xs font-bold shadow-glow-md transition-all disabled:opacity-50 cursor-pointer"
                 >
                   {isSaving ? 'Transferindo...' : 'Confirmar Transferência'}
                 </button>
@@ -3330,29 +3669,29 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
         </div>
       )}
 
-      {/* SHARED POPUP 4: EDIT STUDENT DATA, TURMA & LIBERATED COURSES */}
+      {/* SHARED POPUP: EDIT STUDENT DATA */}
       {editingStudentCourses && (
         <div
           onClick={() => setEditingStudentCourses(null)}
-          className="fixed inset-0 z-[70] bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 pb-20 md:pb-6"
+          className="fixed inset-0 z-[90] bg-black/75 backdrop-blur-sm flex items-center justify-center p-0 sm:p-4"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md max-h-[calc(100dvh-6rem)] md:max-h-[86vh] rounded-3xl bg-[#141220] border border-white/10 shadow-2xl overflow-hidden flex flex-col"
+            className="h-[100dvh] max-h-[100dvh] w-full rounded-none sm:h-auto sm:max-h-[86dvh] sm:rounded-3xl max-w-md bg-surface border-0 sm:border border-line shadow-pop overflow-hidden flex flex-col"
           >
-            <div className="shrink-0 px-5 py-4 border-b border-white/10 flex items-center justify-between gap-3">
+            <div className="shrink-0 px-5 py-4 border-b border-line flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <h3 className="text-base font-extrabold tracking-tight text-white truncate">
+                <h3 className="text-base font-extrabold tracking-tight text-ink truncate">
                   Editar Aluno
                 </h3>
-                <p className="text-xs text-slate-400 truncate">
+                <p className="text-xs text-ink-muted truncate">
                   {editingStudentCourses.email}
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setEditingStudentCourses(null)}
-                className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                className="p-2 rounded-xl text-ink-muted hover:text-ink hover:bg-chip-hover transition-colors cursor-pointer"
                 aria-label="Fechar popup de edição do aluno"
               >
                 <X className="w-5 h-5" />
@@ -3360,27 +3699,40 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
             </div>
 
             <form
+              noValidate
               onSubmit={handleSaveStudentCourses}
               className="flex-1 flex flex-col min-h-0"
             >
               <div className="flex-1 overflow-y-auto p-5 space-y-4">
                 <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                  <label className="block text-xs font-medium text-ink-2 mb-1.5">
                     Nome do Aluno
                   </label>
                   <input
+                    ref={editStuNameRef}
                     type="text"
-                    required
                     maxLength={120}
                     value={editStuName}
-                    onChange={(e) => setEditStuName(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-sm text-white focus:outline-none focus:border-[#3b82f6]"
+                    onChange={(e) => {
+                      setEditStuName(e.target.value);
+                      if (editStuNameError) setEditStuNameError(null);
+                    }}
+                    className={`w-full px-3.5 py-2.5 rounded-xl bg-inset border text-sm text-ink focus:outline-none ${
+                      editStuNameError
+                        ? 'border-danger focus:border-danger'
+                        : 'border-line focus:border-brand-soft'
+                    }`}
                   />
+                  {editStuNameError && (
+                    <p className="text-xs font-medium text-danger mt-1">
+                      {editStuNameError}
+                    </p>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
                   <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    <label className="block text-xs font-medium text-ink-2 mb-1.5">
                       CPF
                     </label>
                     <input
@@ -3389,12 +3741,12 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                       value={editStuCpf}
                       onChange={(e) => setEditStuCpf(e.target.value)}
                       placeholder="000.000.000-00"
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-sm text-white focus:outline-none focus:border-[#3b82f6]"
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    <label className="block text-xs font-medium text-ink-2 mb-1.5">
                       Telefone
                     </label>
                     <input
@@ -3403,12 +3755,12 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                       value={editStuPhone}
                       onChange={(e) => setEditStuPhone(e.target.value)}
                       placeholder="(00) 00000-0000"
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-sm text-white focus:outline-none focus:border-[#3b82f6]"
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    <label className="block text-xs font-medium text-ink-2 mb-1.5">
                       Data de Nascimento
                     </label>
                     <input
@@ -3419,14 +3771,13 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                         setEditStuBirthDate(formatBirthDateInput(e.target.value))
                       }
                       placeholder="DD/MM/AAAA"
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-sm text-white tabular-nums focus:outline-none focus:border-[#3b82f6]"
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink tabular-nums focus:outline-none focus:border-brand-soft"
                     />
                   </div>
                 </div>
 
-                {/* TURMA SELECTOR */}
                 <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                  <label className="block text-xs font-medium text-ink-2 mb-1.5">
                     Turma do Aluno (os cursos são liberados pela turma)
                   </label>
                   <select
@@ -3453,7 +3804,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                         setEditStuCourseIds([]);
                       }
                     }}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-xs font-semibold text-white focus:outline-none focus:border-[#3b82f6]"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-xs font-semibold text-ink focus:outline-none focus:border-brand-soft"
                   >
                     <option value="">
                       Sem turma (bloqueado / apenas Teste Grátis)
@@ -3467,12 +3818,12 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                 </div>
 
                 {Boolean(editStuTurmaId) && (
-                  <div className="p-3.5 rounded-2xl bg-[#0d0b14] border border-white/10 space-y-2">
-                    <span className="block text-xs font-bold text-slate-300">
+                  <div className="p-3.5 rounded-2xl bg-inset border border-line space-y-2">
+                    <span className="block text-xs font-bold text-ink-2">
                       Cursos liberados pela turma selecionada:
                     </span>
                     {editStuAccessAll ? (
-                      <span className="text-xs font-bold text-emerald-400 block">
+                      <span className="text-xs font-bold text-emerald-500 block">
                         Todos os cursos liberados ({regularCourses.length})
                       </span>
                     ) : editStuCourseIds.length > 0 ? (
@@ -3482,14 +3833,14 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                           .map((c) => (
                             <span
                               key={c.id}
-                              className="px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-semibold"
+                              className="px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-500 text-xs font-semibold"
                             >
                               {c.title}
                             </span>
                           ))}
                       </div>
                     ) : (
-                      <span className="text-xs text-rose-300 font-semibold block">
+                      <span className="text-xs text-rose-500 font-semibold block">
                         Nenhum curso liberado nesta turma ainda.
                       </span>
                     )}
@@ -3497,18 +3848,18 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                 )}
               </div>
 
-              <div className="shrink-0 px-5 py-3.5 border-t border-white/10 bg-[#141220] flex items-center justify-end gap-2.5">
+              <div className="shrink-0 px-5 py-3.5 border-t border-line bg-surface flex items-center justify-end gap-2.5">
                 <button
                   type="button"
                   onClick={() => setEditingStudentCourses(null)}
-                  className="px-4 py-2.5 rounded-full bg-white/5 hover:bg-white/10 text-xs font-bold text-slate-300 transition-colors cursor-pointer"
+                  className="px-4 py-2.5 rounded-full bg-chip hover:bg-chip-hover text-xs font-bold text-ink-2 transition-colors cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={isSaving}
-                  className="px-6 py-2.5 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold shadow-[0_6px_24px_rgba(37,99,235,0.45)] transition-all disabled:opacity-50 cursor-pointer"
+                  className="px-6 py-2.5 rounded-full bg-brand hover:bg-brand-hover text-white text-xs font-bold shadow-glow-md transition-all disabled:opacity-50 cursor-pointer"
                 >
                   {isSaving ? 'Salvando...' : 'Salvar'}
                 </button>
@@ -3518,24 +3869,24 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
         </div>
       )}
 
-      {/* SHARED POPUP: CADASTRAR ALUNO (SEARCH PLATFORM EMAILS OR REGISTER MANUALLY) */}
+      {/* SHARED POPUP: CADASTRAR ALUNO */}
       {isStudentPopupOpen && (
         <div
           onClick={() => setIsStudentPopupOpen(false)}
-          className="fixed inset-0 z-[70] bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 pb-20 md:pb-6"
+          className="fixed inset-0 z-[90] bg-black/75 backdrop-blur-sm flex items-center justify-center p-0 sm:p-4"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-lg max-h-[calc(100dvh-6rem)] md:max-h-[86vh] rounded-3xl bg-[#141220] border border-white/10 shadow-2xl overflow-hidden flex flex-col"
+            className="h-[100dvh] max-h-[100dvh] w-full rounded-none sm:h-auto sm:max-h-[86dvh] sm:rounded-3xl max-w-lg bg-surface border-0 sm:border border-line shadow-pop overflow-hidden flex flex-col"
           >
-            <div className="shrink-0 px-5 py-4 border-b border-white/10 flex items-center justify-between gap-3">
-              <h3 className="text-base font-extrabold tracking-tight text-white">
+            <div className="shrink-0 px-5 py-4 border-b border-line flex items-center justify-between gap-3">
+              <h3 className="text-base font-extrabold tracking-tight text-ink">
                 Cadastrar Aluno
               </h3>
               <button
                 type="button"
                 onClick={() => setIsStudentPopupOpen(false)}
-                className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                className="p-2 rounded-xl text-ink-muted hover:text-ink hover:bg-chip-hover transition-colors cursor-pointer"
                 aria-label="Fechar popup de cadastro de aluno"
               >
                 <X className="w-5 h-5" />
@@ -3543,26 +3894,26 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
             </div>
 
             <form
+              noValidate
               onSubmit={handleStudentSubmit}
               className="flex-1 flex flex-col min-h-0"
             >
               <div className="flex-1 overflow-y-auto p-5 space-y-4">
-                {/* 1. VERIFICAR E PESQUISAR TODOS OS E-MAILS QUE JÁ ENTRARAM NA PLATAFORMA (SOMENTE E-MAIL, SEM NOME) */}
-                <div className="p-3.5 rounded-2xl bg-[#0d0b14] border border-white/10 space-y-2.5">
+                <div className="p-3.5 rounded-2xl bg-inset border border-line space-y-2.5">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-bold text-blue-300">
+                    <span className="text-xs font-bold text-brand-accent">
                       E-mails que já entraram na plataforma ({knownPlatformEntries.length})
                     </span>
                   </div>
 
                   <div className="relative">
-                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <Search className="w-3.5 h-3.5 text-ink-muted absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                     <input
                       type="text"
                       value={studentSearchQuery}
                       onChange={(e) => setStudentSearchQuery(e.target.value)}
                       placeholder="Pesquisar e-mail..."
-                      className="w-full pl-8 pr-3 py-2 rounded-xl bg-[#141220] border border-white/10 text-xs text-white focus:outline-none focus:border-[#3b82f6]"
+                      className="w-full pl-8 pr-3 py-2 rounded-xl bg-surface border border-line text-xs text-ink focus:outline-none focus:border-brand-soft"
                     />
                   </div>
 
@@ -3574,7 +3925,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
 
                     if (knownPlatformEntries.length === 0) {
                       return (
-                        <p className="text-[11px] text-slate-400 py-1">
+                        <p className="text-[11px] text-ink-muted py-1">
                           Nenhum e-mail registrado ainda. Preencha os campos
                           abaixo para cadastrar manualmente.
                         </p>
@@ -3584,7 +3935,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                     if (filteredEntries.length === 0) {
                       return (
                         <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                          <span className="text-[11px] text-slate-400">
+                          <span className="text-[11px] text-ink-muted">
                             Este e-mail ainda não entrou na plataforma. Cadastre
                             manualmente abaixo.
                           </span>
@@ -3594,7 +3945,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                               onClick={() => {
                                 setStudentEmail(studentSearchQuery.trim());
                               }}
-                              className="px-2.5 py-1 rounded-lg bg-[#2563eb]/25 text-blue-200 text-[11px] font-bold cursor-pointer"
+                              className="px-2.5 py-1 rounded-lg bg-brand/20 text-brand-accent text-[11px] font-bold cursor-pointer"
                             >
                               Usar este e-mail
                             </button>
@@ -3617,8 +3968,8 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                               }
                               className={`w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl text-left text-xs transition-colors cursor-pointer ${
                                 isSelected
-                                  ? 'bg-[#2563eb]/25 border border-[#3b82f6] text-white'
-                                  : 'bg-[#141220] hover:bg-white/5 border border-white/5 text-slate-200'
+                                  ? 'bg-brand/20 border border-brand-soft text-ink'
+                                  : 'bg-surface hover:bg-chip-hover border border-line-soft text-ink-2'
                               }`}
                             >
                               <span className="font-bold truncate">
@@ -3627,8 +3978,8 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                               <span
                                 className={`px-2.5 py-1 rounded-lg text-[10px] font-bold shrink-0 ${
                                   isSelected
-                                    ? 'bg-[#2563eb] text-white'
-                                    : 'bg-white/10 text-blue-200'
+                                    ? 'bg-brand text-white'
+                                    : 'bg-chip text-brand-accent'
                                 }`}
                               >
                                 {isSelected ? 'Selecionado' : 'Selecionar'}
@@ -3641,19 +3992,19 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                   })()}
                 </div>
 
-                {/* 2. DADOS DO ALUNO (PREENCHIDOS AO SELECIONAR OU DIGITADOS MANUALMENTE) */}
                 <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                  <label className="block text-xs font-medium text-ink-2 mb-1.5">
                     E-mail Google
                   </label>
                   <input
+                    ref={studentEmailRef}
                     type="email"
-                    required
                     maxLength={180}
                     value={studentEmail}
                     onChange={(e) => {
                       const val = e.target.value;
                       setStudentEmail(val);
+                      if (studentFormError) setStudentFormError(null);
                       const matched = knownPlatformEntries.find(
                         (item) => item.email === val.trim().toLowerCase()
                       );
@@ -3668,28 +4019,37 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                       }
                     }}
                     placeholder="aluno@gmail.com"
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-sm text-white focus:outline-none focus:border-[#3b82f6]"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                  <label className="block text-xs font-medium text-ink-2 mb-1.5">
                     Nome
                   </label>
                   <input
+                    ref={studentNameRef}
                     type="text"
-                    required
                     maxLength={120}
                     value={studentName}
-                    onChange={(e) => setStudentName(e.target.value)}
+                    onChange={(e) => {
+                      setStudentName(e.target.value);
+                      if (studentFormError) setStudentFormError(null);
+                    }}
                     placeholder="Nome do aluno"
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-sm text-white focus:outline-none focus:border-[#3b82f6]"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
                   />
                 </div>
 
+                {studentFormError && (
+                  <p className="text-xs font-medium text-danger">
+                    {studentFormError}
+                  </p>
+                )}
+
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
                   <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    <label className="block text-xs font-medium text-ink-2 mb-1.5">
                       CPF (fixo)
                     </label>
                     <input
@@ -3698,12 +4058,12 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                       value={studentCpf}
                       onChange={(e) => setStudentCpf(e.target.value)}
                       placeholder="000.000.000-00"
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-sm text-white focus:outline-none focus:border-[#3b82f6]"
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    <label className="block text-xs font-medium text-ink-2 mb-1.5">
                       Telefone
                     </label>
                     <input
@@ -3712,12 +4072,12 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                       value={studentPhone}
                       onChange={(e) => setStudentPhone(e.target.value)}
                       placeholder="(00) 00000-0000"
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-sm text-white focus:outline-none focus:border-[#3b82f6]"
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    <label className="block text-xs font-medium text-ink-2 mb-1.5">
                       Data de Nascimento
                     </label>
                     <input
@@ -3730,13 +4090,13 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                         )
                       }
                       placeholder="DD/MM/AAAA"
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-sm text-white tabular-nums focus:outline-none focus:border-[#3b82f6]"
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink tabular-nums focus:outline-none focus:border-brand-soft"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                  <label className="block text-xs font-medium text-ink-2 mb-1.5">
                     Turma (os cursos são liberados pela turma)
                   </label>
                   <select
@@ -3761,7 +4121,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                         setStudentCourseIds([]);
                       }
                     }}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-xs font-semibold text-white focus:outline-none focus:border-[#3b82f6]"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-xs font-semibold text-ink focus:outline-none focus:border-brand-soft"
                   >
                     <option value="">
                       Sem turma (bloqueado / apenas Teste Grátis)
@@ -3775,12 +4135,12 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                 </div>
 
                 {Boolean(studentTurmaId) && (
-                  <div className="p-3.5 rounded-2xl bg-[#0d0b14] border border-white/10 space-y-2">
-                    <span className="block text-xs font-bold text-slate-300">
+                  <div className="p-3.5 rounded-2xl bg-inset border border-line space-y-2">
+                    <span className="block text-xs font-bold text-ink-2">
                       Cursos liberados pela turma selecionada:
                     </span>
                     {studentAccessAll ? (
-                      <span className="text-xs font-bold text-emerald-400 block">
+                      <span className="text-xs font-bold text-emerald-500 block">
                         Todos os cursos liberados ({regularCourses.length})
                       </span>
                     ) : studentCourseIds.length > 0 ? (
@@ -3790,14 +4150,14 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                           .map((c) => (
                             <span
                               key={c.id}
-                              className="px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-semibold"
+                              className="px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-500 text-xs font-semibold"
                             >
                               {c.title}
                             </span>
                           ))}
                       </div>
                     ) : (
-                      <span className="text-xs text-rose-300 font-semibold block">
+                      <span className="text-xs text-rose-500 font-semibold block">
                         Nenhum curso liberado nesta turma ainda.
                       </span>
                     )}
@@ -3805,18 +4165,18 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                 )}
               </div>
 
-              <div className="shrink-0 px-5 py-3.5 border-t border-white/10 bg-[#141220] flex items-center justify-end gap-2.5">
+              <div className="shrink-0 px-5 py-3.5 border-t border-line bg-surface flex items-center justify-end gap-2.5">
                 <button
                   type="button"
                   onClick={() => setIsStudentPopupOpen(false)}
-                  className="px-4 py-2.5 rounded-full bg-white/5 hover:bg-white/10 text-xs font-bold text-slate-300 transition-colors cursor-pointer"
+                  className="px-4 py-2.5 rounded-full bg-chip hover:bg-chip-hover text-xs font-bold text-ink-2 transition-colors cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={isSaving}
-                  className="px-6 py-2.5 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold shadow-[0_6px_24px_rgba(37,99,235,0.45)] transition-all disabled:opacity-50 cursor-pointer"
+                  className="px-6 py-2.5 rounded-full bg-brand hover:bg-brand-hover text-white text-xs font-bold shadow-glow-md transition-all disabled:opacity-50 cursor-pointer"
                 >
                   {isSaving ? 'Salvando...' : 'Salvar Aluno'}
                 </button>
@@ -3826,88 +4186,287 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
         </div>
       )}
 
-      {/* TAB 5: PLATFORM BACKGROUND & BRAND */}
+      {/* TAB 6: MENTORIA */}
+      {activeTab === 'mentoria' && (
+        <AdminMentoriaTab
+          students={students}
+          currentUserUid={currentUserUid}
+        />
+      )}
+
+      {/* TAB 7: PLATFORM BACKGROUND & BRAND + MIGRATIONS & SECURITY */}
       {activeTab === 'config' && (
-        <form
-          onSubmit={handleConfigSubmit}
-          className="max-w-xl p-6 rounded-2xl bg-[#141220] border border-white/10 space-y-4"
-        >
-          <CleanCoverInput
-            label="Imagem de Plano de Fundo"
-            sizeHint="1080 × 1920 px"
-            value={heroBgUrl}
-            onChange={setHeroBgUrl}
-            targetWidth={IMAGE_DIMENSIONS.PLATFORM_BG.targetWidth}
-            targetHeight={IMAGE_DIMENSIONS.PLATFORM_BG.targetHeight}
-            resetValue=""
-          />
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">
-                Nome da Plataforma
-              </label>
-              <input
-                type="text"
-                required
-                maxLength={60}
-                value={brandName}
-                onChange={(e) => setBrandName(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-sm text-white focus:outline-none focus:border-[#3b82f6]"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">
-                Texto do Botão (Alunos Bloqueados)
-              </label>
-              <input
-                type="text"
-                required
-                maxLength={60}
-                value={heroCtaText}
-                onChange={(e) => setHeroCtaText(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-sm text-white focus:outline-none focus:border-[#3b82f6]"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1">
-              Título Principal
-            </label>
-            <input
-              type="text"
-              required
-              maxLength={140}
-              value={heroTitle}
-              onChange={(e) => setHeroTitle(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-sm text-white focus:outline-none focus:border-[#3b82f6]"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1">
-              Subtítulo
-            </label>
-            <input
-              type="text"
-              required
-              maxLength={240}
-              value={heroSubtitle}
-              onChange={(e) => setHeroSubtitle(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-xl bg-[#0d0b14] border border-white/10 text-sm text-white focus:outline-none focus:border-[#3b82f6]"
-            />
-          </div>
-
-          <button
-            type="submit"
-            disabled={isSaving}
-            className="py-2.5 px-6 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
+        <div className="space-y-6 max-w-3xl pb-24 sm:pb-6">
+          <form
+            noValidate
+            onSubmit={handleConfigSubmit}
+            className="p-6 rounded-2xl bg-surface border border-line shadow-card space-y-4"
           >
-            Salvar
-          </button>
-        </form>
+            <h3 className="text-sm font-bold text-ink mb-2">
+              Personalização Visual & Marca
+            </h3>
+
+            <CleanCoverInput
+              label="Imagem de Plano de Fundo"
+              sizeHint="1080 × 1920 px"
+              value={heroBgUrl}
+              onChange={setHeroBgUrl}
+              targetWidth={IMAGE_DIMENSIONS.PLATFORM_BG.targetWidth}
+              targetHeight={IMAGE_DIMENSIONS.PLATFORM_BG.targetHeight}
+              resetValue=""
+            />
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-ink-2 mb-1">
+                  Nome da Plataforma
+                </label>
+                <input
+                  type="text"
+                  maxLength={60}
+                  value={brandName}
+                  onChange={(e) => setBrandName(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-ink-2 mb-1">
+                  Texto do Botão (Alunos Bloqueados)
+                </label>
+                <input
+                  type="text"
+                  maxLength={60}
+                  value={heroCtaText}
+                  onChange={(e) => setHeroCtaText(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-ink-2 mb-1">
+                Título Principal
+              </label>
+              <input
+                type="text"
+                maxLength={140}
+                value={heroTitle}
+                onChange={(e) => setHeroTitle(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-ink-2 mb-1">
+                Subtítulo
+              </label>
+              <input
+                type="text"
+                maxLength={240}
+                value={heroSubtitle}
+                onChange={(e) => setHeroSubtitle(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={isSaving}
+              className="py-2.5 px-6 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
+            >
+              Salvar Configurações
+            </button>
+          </form>
+
+          {/* FERRAMENTAS DE MIGRAÇÃO (A4.1, A4.2 & Fase 1.6) */}
+          <div className="p-6 rounded-2xl bg-surface border border-line shadow-card space-y-5">
+            <div>
+              <h3 className="text-sm font-bold text-ink flex items-center gap-2">
+                <Database className="w-4 h-4 text-brand-soft" />
+                Migrações & Manutenção de Dados
+              </h3>
+              <p className="text-xs text-ink-muted mt-1">
+                Ferramentas para atualizar documentos legados e otimizar imagens existentes.
+              </p>
+            </div>
+
+            {/* Image Optimization (Fase 1.6) */}
+            <div className="p-4 rounded-xl bg-inset border border-line-soft space-y-3">
+              <div>
+                <h4 className="text-xs font-bold text-ink">
+                  Otimizar imagens existentes
+                </h4>
+                <p className="text-[11px] text-ink-muted mt-0.5">
+                  Recomprime capas de cursos, playlists, miniaturas de aulas e banner acima de 150 KB, salvando apenas se o arquivo final ficar menor.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                disabled={optimizingImages}
+                onClick={handleOptimizeExistingImages}
+                className="px-4 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer inline-flex items-center gap-2"
+              >
+                <ImageIcon className="w-3.5 h-3.5" />
+                <span>
+                  {optimizingImages
+                    ? 'Otimizando imagens...'
+                    : 'Otimizar imagens existentes'}
+                </span>
+              </button>
+
+              {optimizeImagesMsg && (
+                <p className="text-xs text-brand-accent font-medium">
+                  {optimizeImagesMsg}
+                </p>
+              )}
+            </div>
+
+            {/* Gabaritos Migration */}
+            <div className="p-4 rounded-xl bg-inset border border-line-soft space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h4 className="text-xs font-bold text-ink">
+                    Migrar Gabaritos de Simulados (Coleção simuladoKeys)
+                  </h4>
+                  <p className="text-[11px] text-ink-muted mt-0.5">
+                    Move o campo answerKey dos simulados para a coleção isolada protegida por regras.
+                  </p>
+                </div>
+                {simuladosWithInlineKey.length > 0 ? (
+                  <span className="px-2.5 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-500 text-[11px] font-bold">
+                    {simuladosWithInlineKey.length} com gabarito legado
+                  </span>
+                ) : (
+                  <span className="px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-500 text-[11px] font-bold inline-flex items-center gap-1">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    100% Protegido
+                  </span>
+                )}
+              </div>
+
+              {simuladosWithInlineKey.length > 0 && (
+                <button
+                  type="button"
+                  disabled={migratingKeys}
+                  onClick={handleMigrateGabaritos}
+                  className="px-4 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer inline-flex items-center gap-2"
+                >
+                  <KeyRound className="w-3.5 h-3.5" />
+                  <span>
+                    {migratingKeys
+                      ? 'Migrando...'
+                      : `Migrar ${simuladosWithInlineKey.length} Gabarito(s)`}
+                  </span>
+                </button>
+              )}
+
+              {migrationKeysMsg && (
+                <p className="text-xs text-brand-accent font-medium">
+                  {migrationKeysMsg}
+                </p>
+              )}
+            </div>
+
+            {/* Free PDFs Migration */}
+            <div className="p-4 rounded-xl bg-inset border border-line-soft space-y-3">
+              <div>
+                <h4 className="text-xs font-bold text-ink">
+                  Marcar PDFs de Aulas Grátis
+                </h4>
+                <p className="text-[11px] text-ink-muted mt-0.5">
+                  Atualiza todas as partes de PDFs (pdfChunks) vinculadas a aulas gratuitas com o campo isFree: true.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                disabled={migratingPdfs}
+                onClick={handleMigrateFreePdfs}
+                className="px-4 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer inline-flex items-center gap-2"
+              >
+                <Database className="w-3.5 h-3.5" />
+                <span>
+                  {migratingPdfs ? 'Atualizando...' : 'Marcar PDFs Grátis'}
+                </span>
+              </button>
+
+              {migrationPdfsMsg && (
+                <p className="text-xs text-brand-accent font-medium">
+                  {migrationPdfsMsg}
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* CHECKLIST DE SEGURANÇA NO CONSOLE FIREBASE (A6.4) */}
+          <div className="p-6 rounded-2xl bg-surface-2 border border-brand-soft/40 shadow-card space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-brand/20 border border-brand/40 text-brand-accent flex items-center justify-center shrink-0">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-ink">
+                  Checklist de Segurança do Console Firebase (Ações Manuais)
+                </h3>
+                <p className="text-xs text-brand-accent mt-0.5">
+                  Itens que devem ser configurados diretamente no Console do Firebase e Google Cloud.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-3 pt-1 text-xs text-ink-2">
+              <div className="p-3.5 rounded-xl bg-inset border border-line-soft space-y-1">
+                <div className="flex items-center gap-2 text-ink font-semibold">
+                  <span className="w-5 h-5 rounded-full bg-brand/20 text-brand-accent flex items-center justify-center text-[10px] font-bold">
+                    1
+                  </span>
+                  <span>Firebase App Check</span>
+                </div>
+                <p className="text-ink-muted text-[11px] pl-7">
+                  No Firebase Console → App Check: registre a aplicação Web com reCAPTCHA Enterprise (ou Play Integrity no Android) e ative a imposição (Enforcement) para Cloud Firestore e Storage. Isso impede scraping direto de chamadas de fora do seu domínio.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-inset border border-line-soft space-y-1">
+                <div className="flex items-center gap-2 text-ink font-semibold">
+                  <span className="w-5 h-5 rounded-full bg-brand/20 text-brand-accent flex items-center justify-center text-[10px] font-bold">
+                    2
+                  </span>
+                  <span>Restrição da API Key (Google Cloud Console)</span>
+                </div>
+                <p className="text-ink-muted text-[11px] pl-7">
+                  Acesse Google Cloud Console → APIs e Serviços → Credenciais. Selecione a API Key do projeto e aplique restrições de aplicativo (Referenciadores HTTP: adicione apenas o seu domínio oficial) e restrições de API (selecione apenas Cloud Firestore API, Firebase Authentication API e Cloud Storage).
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-inset border border-line-soft space-y-1">
+                <div className="flex items-center gap-2 text-ink font-semibold">
+                  <span className="w-5 h-5 rounded-full bg-brand/20 text-brand-accent flex items-center justify-center text-[10px] font-bold">
+                    3
+                  </span>
+                  <span>Domínios Autorizados no Firebase Auth</span>
+                </div>
+                <p className="text-ink-muted text-[11px] pl-7">
+                  No Firebase Console → Authentication → Configurações → Domínios Autorizados: certifique-se de que constam apenas o domínio de produção oficial e localhost (para testes). Remova domínios desconhecidos ou expirados.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-inset border border-line-soft space-y-1">
+                <div className="flex items-center gap-2 text-ink font-semibold">
+                  <span className="w-5 h-5 rounded-full bg-brand/20 text-brand-accent flex items-center justify-center text-[10px] font-bold">
+                    4
+                  </span>
+                  <span>Alertas de Faturamento & Orçamento (Budgets)</span>
+                </div>
+                <p className="text-ink-muted text-[11px] pl-7">
+                  No Google Cloud Console → Faturamento → Orçamentos e Alertas: crie um orçamento com alertas por e-mail (50%, 90% e 100%) para monitorar o consumo do Firestore e do Storage sem surpresas financeiras.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

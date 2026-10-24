@@ -1,6 +1,6 @@
 {
-  "name": "MemberClass Pro",
-  "description": "Plataforma minimalista de área de membros e cursos online com player de vídeo protegido, playlists modulares e materiais em PDF.",
+  "name": "Curso Vértice — Área do Aluno",
+  "description": "Plataforma de estudos Curso Vértice para Enem e vestibulares — Especialista em Física, Química e Matemática.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -49,12 +49,12 @@ const QuestionOrderSlideToggle: React.FC<QuestionOrderSlideToggleProps> = ({
     <div
       role="group"
       aria-label="Ordenar questões"
-      className="relative inline-grid grid-cols-2 p-1 rounded-full bg-[#0d1527] border border-white/10 select-none shrink-0"
+      className="relative inline-grid grid-cols-2 p-1 rounded-full bg-surface border border-line select-none shrink-0"
     >
       {/* Sliding active pill */}
       <div
         aria-hidden="true"
-        className={`pointer-events-none absolute top-1 bottom-1 left-1 w-[calc(50%-4px)] rounded-full bg-[#2563eb] shadow-[0_4px_16px_rgba(37,99,235,0.45)] transition-transform duration-200 ease-out ${
+        className={`pointer-events-none absolute top-1 bottom-1 left-1 w-[calc(50%-4px)] rounded-full bg-brand shadow-glow-sm transition-transform duration-200 ease-out ${
           isDifficulty ? 'translate-x-full' : 'translate-x-0'
         }`}
       />
@@ -64,8 +64,8 @@ const QuestionOrderSlideToggle: React.FC<QuestionOrderSlideToggleProps> = ({
         onClick={() => onChange('exam_order')}
         className={`relative z-10 px-3.5 py-1.5 rounded-full text-xs font-bold transition-colors text-center whitespace-nowrap cursor-pointer ${
           !isDifficulty
-            ? 'text-white keep-white-text'
-            : 'text-slate-300/80 hover:text-white'
+            ? 'text-white'
+            : 'text-ink-2 hover:text-ink'
         }`}
       >
         Ordem de Prova
@@ -76,8 +76,8 @@ const QuestionOrderSlideToggle: React.FC<QuestionOrderSlideToggleProps> = ({
         onClick={() => onChange('difficulty_asc')}
         className={`relative z-10 px-3.5 py-1.5 rounded-full text-xs font-bold transition-colors text-center whitespace-nowrap cursor-pointer ${
           isDifficulty
-            ? 'text-white keep-white-text'
-            : 'text-slate-300/80 hover:text-white'
+            ? 'text-white'
+            : 'text-ink-2 hover:text-ink'
         }`}
       >
         Fácil → Difícil
@@ -91,12 +91,21 @@ function getTierLabel(tier: ItemDifficultyTier): {
   textColor: string;
 } {
   if (tier === 'easy') {
-    return { label: 'Fácil', textColor: 'text-emerald-400' };
+    return {
+      label: 'Fácil',
+      textColor: 'text-emerald-400 [html.theme-light_&]:text-emerald-700',
+    };
   }
   if (tier === 'medium') {
-    return { label: 'Média', textColor: 'text-amber-300' };
+    return {
+      label: 'Média',
+      textColor: 'text-amber-300 [html.theme-light_&]:text-amber-700',
+    };
   }
-  return { label: 'Difícil', textColor: 'text-rose-400' };
+  return {
+    label: 'Difícil',
+    textColor: 'text-rose-400 [html.theme-light_&]:text-rose-700',
+  };
 }
 
 interface LiveExamClockProps {
@@ -129,14 +138,14 @@ const LiveExamClock: React.FC<LiveExamClockProps> = ({
     <div
       className={`px-3.5 py-2 rounded-xl border flex items-center gap-2 text-xs font-bold tabular-nums ${
         isOverTime
-          ? 'bg-rose-500/15 border-rose-500/40 text-rose-300'
-          : 'bg-[#070b14] border-[#2563eb]/40 text-white'
+          ? 'bg-rose-500/15 border-rose-500/40 text-rose-400 [html.theme-light_&]:text-rose-700'
+          : 'bg-inset border-brand-soft/40 text-ink'
       }`}
     >
-      <Clock className="w-4 h-4 text-[#3b82f6]" />
+      <Clock className="w-4 h-4 text-brand-soft" />
       <span>{formatDurationClock(elapsedSec)}</span>
       {timeLimitSec > 0 && (
-        <span className="text-slate-400 font-medium">
+        <span className="text-ink-muted font-medium">
           / {formatDurationClock(timeLimitSec)}
         </span>
       )}
@@ -564,6 +573,24 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
 
   const isEffectiveAdmin = isAdmin && !isBlockedUser;
 
+  if (!isAdmin && isBlockedUser) {
+    return (
+      <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 py-12 text-center">
+        <div className="p-8 md:p-12 rounded-3xl bg-surface border border-line shadow-card max-w-lg mx-auto space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto">
+            <Lock className="w-8 h-8" />
+          </div>
+          <h2 className="text-lg md:text-xl font-bold text-ink">
+            Simulados são exclusivos para alunos
+          </h2>
+          <p className="text-xs md:text-sm text-ink-muted leading-relaxed">
+            Esta seção conta com provas completas, correção TRI oficial e ranking exclusivo para matriculados no Curso Vértice.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   // --- WINDOW 1: TAKING SIMULADO (BUBBLE SHEET + LIVE TIMER + AUTO-SAVE) ---
   if (viewMode === 'taking' && activeSimulado) {
     const qCount = activeSimulado.questionCount;
@@ -574,22 +601,22 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
 
     return (
       <div className="w-full max-w-4xl mx-auto py-4 space-y-6">
-        {/* Sticky Top Exam Bar */}
-        <div className="sticky top-16 z-20 p-4 rounded-2xl bg-[#0d1527]/95 backdrop-blur-md border border-white/10 shadow-xl flex flex-wrap items-center justify-between gap-3">
+        {/* Sticky Top Exam Bar (No redundant backdrop-blur over 95% opaque surface) */}
+        <div className="sticky top-16 z-20 p-4 rounded-2xl bg-surface border border-line shadow-pop flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={handleExitExamToList}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-xs font-bold text-slate-200 transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-chip hover:bg-chip-hover text-xs font-bold text-ink-2 transition-colors cursor-pointer"
             >
-              <ArrowLeft className="w-4 h-4 text-[#3b82f6]" />
+              <ArrowLeft className="w-4 h-4 text-brand-soft" />
               Sair
             </button>
             <div>
-              <h2 className="text-sm font-extrabold tracking-tight text-white truncate max-w-[200px] sm:max-w-xs">
+              <h2 className="text-sm font-extrabold tracking-tight text-ink truncate max-w-[200px] sm:max-w-xs">
                 {activeSimulado.title}
               </h2>
-              <span className="text-xs text-slate-300/80 font-medium tabular-nums">
+              <span className="text-xs text-ink-muted font-medium tabular-nums">
                 {markedCount} de {qCount} marcadas
               </span>
             </div>
@@ -616,9 +643,9 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                       sizeLabel: 'PDF',
                     })
                   }
-                  className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  className="px-3.5 py-2 rounded-xl bg-chip hover:bg-chip-hover text-ink text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
                 >
-                  <FileText className="w-3.5 h-3.5 text-blue-300" />
+                  <FileText className="w-3.5 h-3.5 text-brand-soft" />
                   Ver PDF
                 </button>
                 <button
@@ -629,9 +656,9 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                       activeSimulado.pdfTitle || `${activeSimulado.title}.pdf`
                     )
                   }
-                  className="px-3.5 py-2 rounded-xl bg-[#1e1a30] hover:bg-[#162544] border border-white/10 text-white text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  className="px-3.5 py-2 rounded-xl bg-surface-2 hover:bg-surface-3 border border-line text-ink text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
                 >
-                  <Download className="w-3.5 h-3.5 text-[#3b82f6]" />
+                  <Download className="w-3.5 h-3.5 text-brand-soft" />
                   Baixar PDF
                 </button>
               </>
@@ -641,7 +668,7 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
               type="button"
               onClick={handleFinishExam}
               disabled={isFinishing}
-              className="px-5 py-2 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold shadow-[0_4px_18px_rgba(37,99,235,0.45)] transition-all cursor-pointer disabled:opacity-50"
+              className="px-5 py-2 rounded-full bg-brand hover:bg-brand-hover text-white text-xs font-bold shadow-glow-sm transition-all cursor-pointer disabled:opacity-50"
             >
               {isFinishing ? 'Finalizando...' : 'Finalizar'}
             </button>
@@ -655,9 +682,9 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
             return (
               <div
                 key={idx}
-                className="flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-2xl bg-[#0d1527] border border-white/10"
+                className="flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-2xl bg-surface border border-line shadow-card"
               >
-                <span className="text-xs font-extrabold text-slate-300 tabular-nums w-8">
+                <span className="text-xs font-extrabold text-ink-2 tabular-nums w-8">
                   {String(idx + 1).padStart(2, '0')}
                 </span>
 
@@ -671,8 +698,8 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                         onClick={() => handleSelectBubble(idx, opt)}
                         className={`w-8 h-8 rounded-full text-xs font-extrabold transition-all flex items-center justify-center cursor-pointer ${
                           isSelected
-                            ? 'bg-[#2563eb] text-white shadow-[0_0_12px_rgba(37,99,235,0.6)] scale-105'
-                            : 'bg-[#070b14] hover:bg-white/10 text-slate-300 border border-white/10'
+                            ? 'bg-brand text-white shadow-glow-sm scale-105'
+                            : 'bg-inset hover:bg-chip-hover text-ink-2 border border-line'
                         }`}
                       >
                         {opt}
@@ -697,7 +724,6 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
       (s) => s.simuladoId === activeSimulado.id && s.userId === targetUid
     );
 
-    // Strictly respect resultsReleased for student report
     const showTri = Boolean(activeSimulado.resultsReleased);
 
     const sortedStudentQuestions = evalData
@@ -723,17 +749,17 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                 setViewMode('list');
               }
             }}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#0d1527] hover:bg-white/10 border border-white/10 text-xs font-bold text-white transition-colors cursor-pointer"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-surface hover:bg-surface-2 border border-line text-xs font-bold text-ink transition-colors cursor-pointer"
           >
-            <ArrowLeft className="w-4 h-4 text-[#3b82f6]" />
+            <ArrowLeft className="w-4 h-4 text-brand-soft" />
             Voltar
           </button>
 
           <div className="text-right min-w-0">
-            <h2 className="text-base md:text-lg font-extrabold tracking-tight text-white truncate">
+            <h2 className="text-base md:text-lg font-extrabold tracking-tight text-ink truncate">
               {activeSimulado.title}
             </h2>
-            <p className="text-xs text-slate-300/90 font-medium truncate">
+            <p className="text-xs text-ink-2 font-medium truncate">
               {ENEM_AREA_LABELS[activeSimulado.area].full}
               {sub?.userName ? ` • ${sub.userName}` : ''}
             </p>
@@ -744,61 +770,61 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
           <>
             {/* Top 4 Clean Performance Metrics */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
-              <div className="p-4 rounded-2xl bg-[#0d1527] border border-white/10">
-                <span className="block text-xs font-medium text-slate-300/90">
+              <div className="p-4 rounded-2xl bg-surface border border-line shadow-card">
+                <span className="block text-xs font-medium text-ink-muted">
                   Nota TRI
                 </span>
                 {showTri ? (
-                  <span className="mt-1.5 block text-2xl font-extrabold tracking-tight text-white tabular-nums">
+                  <span className="mt-1.5 block text-2xl font-extrabold tracking-tight text-ink tabular-nums">
                     {evalData.triScore.toFixed(1)}
                   </span>
                 ) : (
-                  <span className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-amber-300">
+                  <span className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-amber-400 [html.theme-light_&]:text-amber-700">
                     <Lock className="w-3.5 h-3.5 shrink-0" />
                     Aguardando liberação
                   </span>
                 )}
               </div>
 
-              <div className="p-4 rounded-2xl bg-[#0d1527] border border-white/10">
-                <span className="block text-xs font-medium text-slate-300/90">
+              <div className="p-4 rounded-2xl bg-surface border border-line shadow-card">
+                <span className="block text-xs font-medium text-ink-muted">
                   Acertos / Erros
                 </span>
                 <div className="mt-1.5 flex items-baseline gap-1.5 tabular-nums">
-                  <span className="text-2xl font-extrabold tracking-tight text-emerald-400">
+                  <span className="text-2xl font-extrabold tracking-tight text-emerald-400 [html.theme-light_&]:text-emerald-700">
                     {evalData.correctCount}
                   </span>
-                  <span className="text-slate-500 font-bold">/</span>
-                  <span className="text-lg font-bold text-rose-400">
+                  <span className="text-ink-faint font-bold">/</span>
+                  <span className="text-lg font-bold text-rose-400 [html.theme-light_&]:text-rose-700">
                     {evalData.wrongCount + evalData.blankCount}
                   </span>
-                  <span className="text-xs font-semibold text-slate-300/90 ml-auto">
+                  <span className="text-xs font-semibold text-ink-2 ml-auto">
                     {evalData.accuracyPercent}%
                   </span>
                 </div>
               </div>
 
-              <div className="p-4 rounded-2xl bg-[#0d1527] border border-white/10">
-                <span className="block text-xs font-medium text-slate-300/90">
+              <div className="p-4 rounded-2xl bg-surface border border-line shadow-card">
+                <span className="block text-xs font-medium text-ink-muted">
                   Coerência Pedagógica
                 </span>
                 {showTri ? (
-                  <span className="mt-1.5 block text-2xl font-extrabold tracking-tight text-blue-300 tabular-nums">
+                  <span className="mt-1.5 block text-2xl font-extrabold tracking-tight text-brand-soft tabular-nums">
                     {evalData.coherencePercent}%
                   </span>
                 ) : (
-                  <span className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-slate-400">
+                  <span className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-ink-muted">
                     <Lock className="w-3.5 h-3.5 shrink-0" />
                     Aguardando liberação
                   </span>
                 )}
               </div>
 
-              <div className="p-4 rounded-2xl bg-[#0d1527] border border-white/10">
-                <span className="block text-xs font-medium text-slate-300/90">
+              <div className="p-4 rounded-2xl bg-surface border border-line shadow-card">
+                <span className="block text-xs font-medium text-ink-muted">
                   Tempo
                 </span>
-                <span className="mt-1.5 block text-xl font-extrabold tracking-tight text-white tabular-nums">
+                <span className="mt-1.5 block text-xl font-extrabold tracking-tight text-ink tabular-nums">
                   {formatDurationClock(sub.durationSeconds)}
                 </span>
               </div>
@@ -806,29 +832,29 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
 
             {showTri && (
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="p-3.5 rounded-2xl bg-[#0d1527] border border-white/10 flex items-center justify-between">
-                  <span className="text-xs font-bold text-emerald-300">
+                <div className="p-3.5 rounded-2xl bg-surface border border-line shadow-card flex items-center justify-between">
+                  <span className="text-xs font-bold text-emerald-400 [html.theme-light_&]:text-emerald-700">
                     Fáceis
                   </span>
-                  <span className="text-sm font-extrabold text-white tabular-nums">
+                  <span className="text-sm font-extrabold text-ink tabular-nums">
                     {evalData.easyCorrect}/{evalData.easyTotal}
                   </span>
                 </div>
 
-                <div className="p-3.5 rounded-2xl bg-[#0d1527] border border-white/10 flex items-center justify-between">
-                  <span className="text-xs font-bold text-amber-300">
+                <div className="p-3.5 rounded-2xl bg-surface border border-line shadow-card flex items-center justify-between">
+                  <span className="text-xs font-bold text-amber-400 [html.theme-light_&]:text-amber-700">
                     Médias
                   </span>
-                  <span className="text-sm font-extrabold text-white tabular-nums">
+                  <span className="text-sm font-extrabold text-ink tabular-nums">
                     {evalData.mediumCorrect}/{evalData.mediumTotal}
                   </span>
                 </div>
 
-                <div className="p-3.5 rounded-2xl bg-[#0d1527] border border-white/10 flex items-center justify-between">
-                  <span className="text-xs font-bold text-rose-300">
+                <div className="p-3.5 rounded-2xl bg-surface border border-line shadow-card flex items-center justify-between">
+                  <span className="text-xs font-bold text-rose-400 [html.theme-light_&]:text-rose-700">
                     Difíceis
                   </span>
-                  <span className="text-sm font-extrabold text-white tabular-nums">
+                  <span className="text-sm font-extrabold text-ink tabular-nums">
                     {evalData.hardCorrect}/{evalData.hardTotal}
                   </span>
                 </div>
@@ -838,7 +864,7 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
             {/* Gabarito & Marcações + Botão Slide (Ordem de Prova vs Fácil -> Difícil) */}
             <div className="space-y-4 pt-2">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <h3 className="text-base font-bold text-white tracking-tight">
+                <h3 className="text-base font-bold text-ink tracking-tight">
                   Gabarito e Marcações
                 </h3>
 
@@ -856,8 +882,8 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                       key={q.questionNumber}
                       className={`p-3 rounded-2xl border flex items-center justify-between gap-2 ${
                         q.isCorrect
-                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'
-                          : 'bg-rose-500/10 border-rose-500/30 text-rose-200'
+                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300 [html.theme-light_&]:text-emerald-800'
+                          : 'bg-rose-500/10 border-rose-500/30 text-rose-300 [html.theme-light_&]:text-rose-800'
                       }`}
                     >
                       <div className="flex items-center gap-1.5 min-w-0">
@@ -867,7 +893,7 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                           <XCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
                         )}
                         <div className="min-w-0">
-                          <span className="block text-xs font-extrabold text-white tabular-nums">
+                          <span className="block text-xs font-extrabold text-ink tabular-nums">
                             {String(q.questionNumber).padStart(2, '0')}
                           </span>
                           {(questionSortOrder === 'difficulty_asc' || showTri) && (
@@ -883,7 +909,7 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                       <div className="text-xs font-extrabold tabular-nums shrink-0">
                         <span>{q.marked}</span>
                         {!q.isCorrect && (
-                          <span className="text-slate-400 font-semibold ml-1">
+                          <span className="text-ink-muted font-semibold ml-1">
                             ({q.official})
                           </span>
                         )}
@@ -906,9 +932,6 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
       (s) => s.simuladoId === activeSimulado.id
     );
 
-    // Sort students by Ranking:
-    // 1. Completed submissions first, ordered by highest TRI score -> highest correctCount -> shortest duration
-    // 2. In-progress submissions after completed ones
     const rankedSubmissions = [...simSubmissions].sort((a, b) => {
       const aDone = a.status === 'completed';
       const bDone = b.status === 'completed';
@@ -927,7 +950,6 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
       return (a.durationSeconds || 0) - (b.durationSeconds || 0);
     });
 
-    // Most hit (easiest) and most missed (hardest) questions in the simulado
     const allItems = summary?.items || [];
     const itemsByEasiestFirst = [...allItems].sort((a, b) => {
       if (b.rawHitPercent !== a.rawHitPercent) {
@@ -956,16 +978,16 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
             <button
               type="button"
               onClick={() => setViewMode('list')}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#0d1527] hover:bg-white/10 border border-white/10 text-xs font-bold text-white transition-colors cursor-pointer"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-surface hover:bg-surface-2 border border-line text-xs font-bold text-ink transition-colors cursor-pointer"
             >
-              <ArrowLeft className="w-4 h-4 text-[#3b82f6]" />
+              <ArrowLeft className="w-4 h-4 text-brand-soft" />
               Voltar
             </button>
             <div>
-              <h2 className="text-lg md:text-xl font-extrabold tracking-tight text-white">
+              <h2 className="text-lg md:text-xl font-extrabold tracking-tight text-ink">
                 {activeSimulado.title}
               </h2>
-              <p className="text-xs text-slate-300/90 font-medium">
+              <p className="text-xs text-ink-2 font-medium">
                 Relatório da Turma • {ENEM_AREA_LABELS[activeSimulado.area].full} •{' '}
                 {activeSimulado.questionCount} questões
               </p>
@@ -978,8 +1000,8 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
               onClick={() => onToggleReleaseResults(activeSimulado)}
               className={`px-5 py-2.5 rounded-full text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
                 activeSimulado.resultsReleased
-                  ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300'
-                  : 'bg-[#2563eb] hover:bg-[#1d4ed8] text-white shadow-[0_6px_24px_rgba(37,99,235,0.45)]'
+                  ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 [html.theme-light_&]:text-emerald-700'
+                  : 'bg-brand hover:bg-brand-hover text-white shadow-glow-md'
               }`}
             >
               {activeSimulado.resultsReleased ? (
@@ -1000,61 +1022,61 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
         {/* Section 1: Relatório Geral da Turma */}
         {summary && (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
-            <div className="p-4 rounded-2xl bg-[#0d1527] border border-white/10">
-              <span className="block text-xs font-medium text-slate-300/90">
+            <div className="p-4 rounded-2xl bg-surface border border-line shadow-card">
+              <span className="block text-xs font-medium text-ink-muted">
                 Média TRI da Turma
               </span>
               {activeSimulado.resultsReleased ? (
-                <span className="mt-1.5 block text-2xl font-extrabold tracking-tight text-white tabular-nums">
+                <span className="mt-1.5 block text-2xl font-extrabold tracking-tight text-ink tabular-nums">
                   {summary.completedCount > 0
                     ? summary.meanTriScore.toFixed(1)
                     : '—'}
                 </span>
               ) : (
-                <span className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-amber-300">
+                <span className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-amber-400 [html.theme-light_&]:text-amber-700">
                   <Lock className="w-3.5 h-3.5 shrink-0" />
                   Calculada ao liberar
                 </span>
               )}
             </div>
 
-            <div className="p-4 rounded-2xl bg-[#0d1527] border border-white/10">
-              <span className="block text-xs font-medium text-slate-300/90">
+            <div className="p-4 rounded-2xl bg-surface border border-line shadow-card">
+              <span className="block text-xs font-medium text-ink-muted">
                 Coerência da Turma
               </span>
               {activeSimulado.resultsReleased ? (
-                <span className="mt-1.5 block text-2xl font-extrabold tracking-tight text-blue-300 tabular-nums">
+                <span className="mt-1.5 block text-2xl font-extrabold tracking-tight text-brand-soft tabular-nums">
                   {summary.completedCount > 0
                     ? `${summary.meanCoherencePercent}%`
                     : '—'}
                 </span>
               ) : (
-                <span className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-slate-400">
+                <span className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-ink-muted">
                   <Lock className="w-3.5 h-3.5 shrink-0" />
                   Calculada ao liberar
                 </span>
               )}
             </div>
 
-            <div className="p-4 rounded-2xl bg-[#0d1527] border border-white/10">
-              <span className="block text-xs font-medium text-slate-300/90">
+            <div className="p-4 rounded-2xl bg-surface border border-line shadow-card">
+              <span className="block text-xs font-medium text-ink-muted">
                 Média de Acertos
               </span>
-              <span className="mt-1.5 block text-2xl font-extrabold tracking-tight text-emerald-400 tabular-nums">
+              <span className="mt-1.5 block text-2xl font-extrabold tracking-tight text-emerald-400 [html.theme-light_&]:text-emerald-700 tabular-nums">
                 {summary.completedCount > 0
                   ? `${summary.meanCorrectCount}/${activeSimulado.questionCount}`
                   : '—'}
               </span>
             </div>
 
-            <div className="p-4 rounded-2xl bg-[#0d1527] border border-white/10">
-              <span className="block text-xs font-medium text-slate-300/90">
+            <div className="p-4 rounded-2xl bg-surface border border-line shadow-card">
+              <span className="block text-xs font-medium text-ink-muted">
                 Alunos Concluídos
               </span>
-              <span className="mt-1.5 block text-2xl font-extrabold tracking-tight text-white tabular-nums">
+              <span className="mt-1.5 block text-2xl font-extrabold tracking-tight text-ink tabular-nums">
                 {summary.completedCount}
                 {summary.inProgressCount > 0 && (
-                  <span className="text-xs text-slate-400 font-medium ml-1.5">
+                  <span className="text-xs text-ink-muted font-medium ml-1.5">
                     (+{summary.inProgressCount} fazendo)
                   </span>
                 )}
@@ -1063,20 +1085,20 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
           </div>
         )}
 
-        {/* Section 2: Ranking de Alunos (Clicável para ver Relatório Individual) */}
+        {/* Section 2: Ranking de Alunos */}
         <section className="space-y-4">
           <div className="flex items-center justify-between gap-2">
-            <h3 className="text-base md:text-lg font-bold text-white tracking-tight flex items-center gap-2">
-              <Trophy className="w-4 h-4 text-[#3b82f6]" />
+            <h3 className="text-base md:text-lg font-bold text-ink tracking-tight flex items-center gap-2">
+              <Trophy className="w-4 h-4 text-brand-soft" />
               Ranking de Alunos ({rankedSubmissions.length})
             </h3>
-            <span className="text-xs text-slate-400 font-medium">
+            <span className="text-xs text-ink-muted font-medium">
               Clique no aluno para ver o relatório individual
             </span>
           </div>
 
           {rankedSubmissions.length === 0 ? (
-            <div className="p-8 rounded-2xl bg-[#0d1527] border border-white/10 text-center text-xs text-slate-400 font-medium">
+            <div className="p-8 rounded-2xl bg-surface border border-line text-center text-xs text-ink-muted font-medium">
               Nenhum aluno realizou este simulado ainda.
             </div>
           ) : (
@@ -1094,24 +1116,24 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                       setSelectedStudentUid(sub.userId);
                       setViewMode('student_result');
                     }}
-                    className="w-full flex flex-wrap items-center justify-between gap-4 p-4 rounded-2xl bg-[#0d1527] hover:bg-[#1a1628] border border-white/10 hover:border-[#3b82f6]/50 text-left transition-all cursor-pointer group"
+                    className="cv-auto-row w-full flex flex-wrap items-center justify-between gap-4 p-4 rounded-2xl bg-surface hover:bg-surface-2 border border-line hover:border-brand-soft/50 text-left transition-all cursor-pointer group shadow-card"
                   >
                     <div className="flex items-center gap-3.5 min-w-0">
                       <div
                         className={`w-9 h-9 rounded-xl flex items-center justify-center text-xs font-extrabold tabular-nums shrink-0 ${
                           rankNumber === 1 && isDone
-                            ? 'bg-[#2563eb] text-white shadow-[0_4px_14px_rgba(37,99,235,0.45)]'
-                            : 'bg-white/5 text-slate-200 border border-white/10'
+                            ? 'bg-brand text-white shadow-glow-sm'
+                            : 'bg-chip text-ink-2 border border-line'
                         }`}
                       >
                         {isDone ? `${rankNumber}º` : '—'}
                       </div>
 
                       <div className="min-w-0">
-                        <p className="text-sm font-extrabold tracking-tight text-white group-hover:text-blue-300 transition-colors truncate">
+                        <p className="text-sm font-extrabold tracking-tight text-ink group-hover:text-brand-soft transition-colors truncate">
                           {sub.userName}
                         </p>
-                        <p className="text-xs text-slate-400 font-medium truncate">
+                        <p className="text-xs text-ink-muted font-medium truncate">
                           {sub.userEmail}
                         </p>
                       </div>
@@ -1121,45 +1143,45 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                       {isDone && evalData ? (
                         <>
                           <div>
-                            <span className="text-slate-400 font-medium block text-[11px]">
+                            <span className="text-ink-muted font-medium block text-[11px]">
                               Acertos
                             </span>
-                            <span className="text-emerald-400 font-extrabold text-sm">
+                            <span className="text-emerald-400 [html.theme-light_&]:text-emerald-700 font-extrabold text-sm">
                               {evalData.correctCount}/{evalData.questionCount}
                             </span>
                           </div>
                           <div>
-                            <span className="text-slate-400 font-medium block text-[11px]">
+                            <span className="text-ink-muted font-medium block text-[11px]">
                               Coerência
                             </span>
-                            <span className="text-blue-300 font-extrabold text-sm">
+                            <span className="text-brand-soft font-extrabold text-sm">
                               {activeSimulado.resultsReleased
                                 ? `${evalData.coherencePercent}%`
                                 : 'Ao liberar'}
                             </span>
                           </div>
                           <div>
-                            <span className="text-slate-400 font-medium block text-[11px]">
+                            <span className="text-ink-muted font-medium block text-[11px]">
                               Nota TRI
                             </span>
-                            <span className="text-white font-extrabold text-sm">
+                            <span className="text-ink font-extrabold text-sm">
                               {activeSimulado.resultsReleased
                                 ? evalData.triScore.toFixed(1)
                                 : 'Ao liberar'}
                             </span>
                           </div>
                           <div className="hidden sm:block">
-                            <span className="text-slate-400 font-medium block text-[11px]">
+                            <span className="text-ink-muted font-medium block text-[11px]">
                               Tempo
                             </span>
-                            <span className="text-slate-200 font-bold text-sm">
+                            <span className="text-ink-2 font-bold text-sm">
                               {formatDurationClock(sub.durationSeconds)}
                             </span>
                           </div>
-                          <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-white transition-colors" />
+                          <ChevronRight className="w-4 h-4 text-ink-muted group-hover:text-ink transition-colors" />
                         </>
                       ) : (
-                        <span className="px-3 py-1 rounded-full bg-amber-500/15 text-amber-300 text-xs font-bold">
+                        <span className="px-3 py-1 rounded-full bg-amber-500/15 text-amber-400 [html.theme-light_&]:text-amber-700 text-xs font-bold">
                           Em andamento
                         </span>
                       )}
@@ -1171,18 +1193,17 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
           )}
         </section>
 
-        {/* Section 3: Questões Mais Acertadas e Mais Erradas + Lista de Questões com Botão Slide */}
+        {/* Section 3: Questões Mais Acertadas e Mais Erradas + Lista de Questões */}
         {allItems.length > 0 && (
           <section className="space-y-5">
-            {/* Destaques: Mais Acertadas vs Mais Erradas */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="p-4 rounded-2xl bg-[#0d1527] border border-white/10 space-y-3">
+              <div className="p-4 rounded-2xl bg-surface border border-line shadow-card space-y-3">
                 <div className="flex items-center justify-between">
-                  <h4 className="text-sm font-extrabold tracking-tight text-emerald-400 flex items-center gap-2">
+                  <h4 className="text-sm font-extrabold tracking-tight text-emerald-400 [html.theme-light_&]:text-emerald-700 flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4" />
                     Questões Mais Acertadas
                   </h4>
-                  <span className="text-xs text-slate-400 font-medium">
+                  <span className="text-xs text-ink-muted font-medium">
                     Maior taxa de acerto
                   </span>
                 </div>
@@ -1193,10 +1214,10 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                       key={item.questionNumber}
                       className="px-3 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/25 flex items-center gap-2 tabular-nums"
                     >
-                      <span className="text-xs font-extrabold text-white">
+                      <span className="text-xs font-extrabold text-ink">
                         Q{String(item.questionNumber).padStart(2, '0')}
                       </span>
-                      <span className="text-xs font-bold text-emerald-300">
+                      <span className="text-xs font-bold text-emerald-400 [html.theme-light_&]:text-emerald-700">
                         {item.rawHitPercent}%
                       </span>
                     </div>
@@ -1204,13 +1225,13 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                 </div>
               </div>
 
-              <div className="p-4 rounded-2xl bg-[#0d1527] border border-white/10 space-y-3">
+              <div className="p-4 rounded-2xl bg-surface border border-line shadow-card space-y-3">
                 <div className="flex items-center justify-between">
-                  <h4 className="text-sm font-extrabold tracking-tight text-rose-400 flex items-center gap-2">
+                  <h4 className="text-sm font-extrabold tracking-tight text-rose-400 [html.theme-light_&]:text-rose-700 flex items-center gap-2">
                     <XCircle className="w-4 h-4" />
                     Questões Mais Erradas
                   </h4>
-                  <span className="text-xs text-slate-400 font-medium">
+                  <span className="text-xs text-ink-muted font-medium">
                     Maior taxa de erro
                   </span>
                 </div>
@@ -1221,10 +1242,10 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                       key={item.questionNumber}
                       className="px-3 py-2 rounded-xl bg-rose-500/10 border border-rose-500/25 flex items-center gap-2 tabular-nums"
                     >
-                      <span className="text-xs font-extrabold text-white">
+                      <span className="text-xs font-extrabold text-ink">
                         Q{String(item.questionNumber).padStart(2, '0')}
                       </span>
-                      <span className="text-xs font-bold text-rose-300">
+                      <span className="text-xs font-bold text-rose-400 [html.theme-light_&]:text-rose-700">
                         {100 - item.rawHitPercent}% erro
                       </span>
                     </div>
@@ -1237,10 +1258,10 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
             <div className="space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h3 className="text-base md:text-lg font-bold text-white tracking-tight">
+                  <h3 className="text-base md:text-lg font-bold text-ink tracking-tight">
                     Desempenho por Questão
                   </h3>
-                  <p className="text-xs text-slate-300/90 font-medium">
+                  <p className="text-xs text-ink-2 font-medium">
                     Taxa de acerto da turma e nível de dificuldade calibrado pela TRI
                   </p>
                 </div>
@@ -1257,10 +1278,10 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                   return (
                     <div
                       key={item.questionNumber}
-                      className="p-3.5 rounded-2xl bg-[#0d1527] border border-white/10 flex flex-col justify-between gap-2"
+                      className="p-3.5 rounded-2xl bg-surface border border-line shadow-card flex flex-col justify-between gap-2"
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-extrabold text-white tabular-nums">
+                        <span className="text-xs font-extrabold text-ink tabular-nums">
                           Questão {String(item.questionNumber).padStart(2, '0')}
                         </span>
                         <span
@@ -1271,18 +1292,18 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                       </div>
 
                       <div className="flex items-baseline justify-between gap-2 tabular-nums pt-1">
-                        <span className="text-xs text-slate-400 font-medium">
+                        <span className="text-xs text-ink-muted font-medium">
                           Gab:{' '}
-                          <strong className="text-white font-extrabold">
+                          <strong className="text-ink font-extrabold">
                             {item.officialAnswer}
                           </strong>
                         </span>
-                        <span className="text-sm font-extrabold text-white">
+                        <span className="text-sm font-extrabold text-ink">
                           {item.rawHitPercent}%
                         </span>
                       </div>
 
-                      <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
+                      <div className="w-full h-1.5 rounded-full bg-chip overflow-hidden">
                         <div
                           className={`h-full rounded-full ${
                             item.tier === 'easy'
@@ -1309,7 +1330,7 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
   return (
     <div className="w-full py-2 space-y-6">
       <div className="flex items-center justify-between gap-4">
-        <h2 className="text-base md:text-lg font-bold text-white tracking-tight">
+        <h2 className="text-base md:text-lg font-bold text-ink tracking-tight">
           Simulados
         </h2>
 
@@ -1317,7 +1338,7 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
           <button
             type="button"
             onClick={onOpenCreateSimulado}
-            className="px-5 py-2.5 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold flex items-center gap-2 shadow-[0_6px_24px_rgba(37,99,235,0.45)] transition-all whitespace-nowrap shrink-0 cursor-pointer"
+            className="px-5 py-2.5 rounded-full bg-brand hover:bg-brand-hover text-white text-xs font-bold flex items-center gap-2 shadow-glow-md transition-all whitespace-nowrap shrink-0 cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             Novo Simulado
@@ -1329,38 +1350,38 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
       {isEffectiveAdmin && simulados.length > 0 && (
         <div className="space-y-4">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div className="p-4 rounded-2xl bg-[#0d1527] border border-white/10">
-              <span className="block text-xs font-medium text-slate-300/90">
+            <div className="p-4 rounded-2xl bg-surface border border-line shadow-card">
+              <span className="block text-xs font-medium text-ink-muted">
                 Média TRI Geral
               </span>
-              <span className="mt-1.5 block text-xl font-extrabold tracking-tight text-white tabular-nums">
+              <span className="mt-1.5 block text-xl font-extrabold tracking-tight text-ink tabular-nums">
                 {adminGeneralStats.meanTri}
               </span>
             </div>
 
-            <div className="p-4 rounded-2xl bg-[#0d1527] border border-white/10">
-              <span className="block text-xs font-medium text-slate-300/90">
+            <div className="p-4 rounded-2xl bg-surface border border-line shadow-card">
+              <span className="block text-xs font-medium text-ink-muted">
                 Coerência da Turma
               </span>
-              <span className="mt-1.5 block text-xl font-extrabold tracking-tight text-blue-300 tabular-nums">
+              <span className="mt-1.5 block text-xl font-extrabold tracking-tight text-brand-soft tabular-nums">
                 {adminGeneralStats.meanCoherence}
               </span>
             </div>
 
-            <div className="p-4 rounded-2xl bg-[#0d1527] border border-white/10">
-              <span className="block text-xs font-medium text-slate-300/90">
+            <div className="p-4 rounded-2xl bg-surface border border-line shadow-card">
+              <span className="block text-xs font-medium text-ink-muted">
                 Aproveitamento
               </span>
-              <span className="mt-1.5 block text-xl font-extrabold tracking-tight text-emerald-400 tabular-nums">
+              <span className="mt-1.5 block text-xl font-extrabold tracking-tight text-emerald-400 [html.theme-light_&]:text-emerald-700 tabular-nums">
                 {adminGeneralStats.meanAccuracy}
               </span>
             </div>
 
-            <div className="p-4 rounded-2xl bg-[#0d1527] border border-white/10">
-              <span className="block text-xs font-medium text-slate-300/90">
+            <div className="p-4 rounded-2xl bg-surface border border-line shadow-card">
+              <span className="block text-xs font-medium text-ink-muted">
                 Provas Concluídas
               </span>
-              <span className="mt-1.5 block text-xl font-extrabold tracking-tight text-white tabular-nums">
+              <span className="mt-1.5 block text-xl font-extrabold tracking-tight text-ink tabular-nums">
                 {adminGeneralStats.totalCompleted}
               </span>
             </div>
@@ -1379,46 +1400,46 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
         </div>
       )}
 
-      {/* STUDENT PERFORMANCE DASHBOARD + CHART (ONLY APPEARS IF STUDENT COMPLETED >= 1 SIMULADO) */}
+      {/* STUDENT PERFORMANCE DASHBOARD + CHART */}
       {!isEffectiveAdmin &&
         studentGeneralStats &&
         studentChartPoints.length > 0 && (
           <div className="space-y-4">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <div className="p-4 rounded-2xl bg-[#0d1527] border border-white/10">
-                <span className="block text-xs font-medium text-slate-300/90">
+              <div className="p-4 rounded-2xl bg-surface border border-line shadow-card">
+                <span className="block text-xs font-medium text-ink-muted">
                   Média TRI
                 </span>
-                <span className="mt-1.5 block text-xl font-extrabold tracking-tight text-white tabular-nums">
+                <span className="mt-1.5 block text-xl font-extrabold tracking-tight text-ink tabular-nums">
                   {studentGeneralStats.meanTri || 'Aguardando'}
                 </span>
               </div>
 
-              <div className="p-4 rounded-2xl bg-[#0d1527] border border-white/10">
-                <span className="block text-xs font-medium text-slate-300/90">
+              <div className="p-4 rounded-2xl bg-surface border border-line shadow-card">
+                <span className="block text-xs font-medium text-ink-muted">
                   Desempenho Geral
                 </span>
-                <span className="mt-1.5 block text-xl font-extrabold tracking-tight text-emerald-400 tabular-nums">
+                <span className="mt-1.5 block text-xl font-extrabold tracking-tight text-emerald-400 [html.theme-light_&]:text-emerald-700 tabular-nums">
                   {studentGeneralStats.overallAccuracy}%
                 </span>
               </div>
 
-              <div className="p-4 rounded-2xl bg-[#0d1527] border border-white/10">
-                <span className="block text-xs font-medium text-slate-300/90">
+              <div className="p-4 rounded-2xl bg-surface border border-line shadow-card">
+                <span className="block text-xs font-medium text-ink-muted">
                   Coerência Pedagógica
                 </span>
-                <span className="mt-1.5 block text-xl font-extrabold tracking-tight text-blue-300 tabular-nums">
+                <span className="mt-1.5 block text-xl font-extrabold tracking-tight text-brand-soft tabular-nums">
                   {studentGeneralStats.meanCoherence !== null
                     ? `${studentGeneralStats.meanCoherence}%`
                     : 'Aguardando'}
                 </span>
               </div>
 
-              <div className="p-4 rounded-2xl bg-[#0d1527] border border-white/10">
-                <span className="block text-xs font-medium text-slate-300/90">
+              <div className="p-4 rounded-2xl bg-surface border border-line shadow-card">
+                <span className="block text-xs font-medium text-ink-muted">
                   Simulados Feitos
                 </span>
-                <span className="mt-1.5 block text-xl font-extrabold tracking-tight text-white tabular-nums">
+                <span className="mt-1.5 block text-xl font-extrabold tracking-tight text-ink tabular-nums">
                   {studentGeneralStats.completedCount}
                 </span>
               </div>
@@ -1457,18 +1478,18 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                   setViewMode('admin_cohort');
                 }
               }}
-              className={`p-5 rounded-2xl bg-[#0d1527] border border-white/10 flex flex-col justify-between gap-4 transition-all ${
+              className={`cv-auto-row p-5 rounded-2xl bg-surface border border-line shadow-card flex flex-col justify-between gap-4 transition-all ${
                 !canAccessSimulado
                   ? 'opacity-80 grayscale'
                   : isEffectiveAdmin
-                    ? 'hover:border-[#3b82f6]/60 hover:bg-[#0d1527] cursor-pointer group'
-                    : 'hover:border-white/20'
+                    ? 'hover:border-brand-soft/60 hover:bg-surface-2 cursor-pointer group'
+                    : 'hover:border-line-strong'
               }`}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="space-y-1.5 min-w-0">
-                  <div className="flex items-center gap-2 text-xs text-slate-300/90 font-medium">
-                    <span className="font-extrabold text-blue-300">
+                  <div className="flex items-center gap-2 text-xs text-ink-2 font-medium">
+                    <span className="font-extrabold text-brand-soft">
                       {ENEM_AREA_LABELS[sim.area].short}
                     </span>
                     <span aria-hidden="true">•</span>
@@ -1483,13 +1504,13 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                     </span>
                   </div>
 
-                  <h3 className="text-base font-extrabold tracking-tight text-white group-hover:text-blue-200 transition-colors truncate">
+                  <h3 className="text-base font-extrabold tracking-tight text-ink group-hover:text-brand-soft transition-colors truncate">
                     {sim.title}
                   </h3>
                 </div>
 
                 {!canAccessSimulado ? (
-                  <div className="w-8 h-8 rounded-full bg-zinc-800 border border-zinc-600/50 text-zinc-300 flex items-center justify-center shrink-0">
+                  <div className="w-8 h-8 rounded-full bg-chip border border-line text-ink-muted flex items-center justify-center shrink-0">
                     <Lock className="w-4 h-4" />
                   </div>
                 ) : isEffectiveAdmin ? (
@@ -1501,7 +1522,7 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                       <button
                         type="button"
                         onClick={() => onOpenEditSimulado(sim)}
-                        className="p-2 rounded-xl text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                        className="p-2 rounded-xl text-ink-2 hover:text-ink hover:bg-chip-hover transition-colors cursor-pointer"
                         title="Editar simulado"
                       >
                         <Edit3 className="w-4 h-4" />
@@ -1511,7 +1532,7 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                       <button
                         type="button"
                         onClick={() => onDeleteSimulado(sim.id)}
-                        className="p-2 rounded-xl text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                        className="p-2 rounded-xl text-ink-muted hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
                         title="Excluir simulado"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -1521,11 +1542,11 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                 ) : null}
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-white/5">
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-line-soft">
                 {isEffectiveAdmin ? (
                   <>
-                    <div className="flex items-center gap-2 text-xs font-medium text-slate-300/90 tabular-nums">
-                      <Users className="w-3.5 h-3.5 text-[#3b82f6]" />
+                    <div className="flex items-center gap-2 text-xs font-medium text-ink-2 tabular-nums">
+                      <Users className="w-3.5 h-3.5 text-brand-soft" />
                       <span>
                         {summary?.completedCount || 0} concluído
                         {(summary?.completedCount || 0) !== 1 ? 's' : ''}
@@ -1534,8 +1555,8 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                       <span
                         className={
                           sim.resultsReleased
-                            ? 'text-emerald-400 font-bold'
-                            : 'text-amber-300 font-semibold'
+                            ? 'text-emerald-400 [html.theme-light_&]:text-emerald-700 font-bold'
+                            : 'text-amber-400 [html.theme-light_&]:text-amber-700 font-semibold'
                         }
                       >
                         {sim.resultsReleased
@@ -1544,7 +1565,7 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                       </span>
                     </div>
 
-                    <span className="inline-flex items-center gap-1.5 text-xs font-bold text-blue-300 group-hover:text-white transition-colors ml-auto">
+                    <span className="inline-flex items-center gap-1.5 text-xs font-bold text-brand-soft group-hover:text-ink transition-colors ml-auto">
                       Relatório da Turma
                       <ChevronRight className="w-4 h-4" />
                     </span>
@@ -1554,28 +1575,28 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                     <div className="text-xs font-medium tabular-nums">
                       {isCompleted && myEval ? (
                         <div className="flex items-center gap-2.5">
-                          <span className="text-emerald-400 font-extrabold">
+                          <span className="text-emerald-400 [html.theme-light_&]:text-emerald-700 font-extrabold">
                             {myEval.correctCount}/{myEval.questionCount} acertos
                           </span>
-                          <span aria-hidden="true" className="text-slate-500">
+                          <span aria-hidden="true" className="text-ink-faint">
                             •
                           </span>
                           {sim.resultsReleased ? (
-                            <span className="text-white font-extrabold">
+                            <span className="text-ink font-extrabold">
                               TRI {myEval.triScore.toFixed(1)}
                             </span>
                           ) : (
-                            <span className="text-amber-300 font-semibold">
+                            <span className="text-amber-400 [html.theme-light_&]:text-amber-700 font-semibold">
                               TRI aguardando liberação
                             </span>
                           )}
                         </div>
                       ) : isInProgress ? (
-                        <span className="text-amber-300 font-semibold">
+                        <span className="text-amber-400 [html.theme-light_&]:text-amber-700 font-semibold">
                           Prova em andamento
                         </span>
                       ) : (
-                        <span className="text-slate-300/80">
+                        <span className="text-ink-muted">
                           {sim.pdfUrl ? 'Caderno PDF e Cartão' : 'Cartão de Respostas'}
                         </span>
                       )}
@@ -1591,7 +1612,7 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                             setSelectedStudentUid(currentUserUid);
                             setViewMode('student_result');
                           }}
-                          className="px-4 py-2 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold transition-colors cursor-pointer disabled:opacity-50"
+                          className="px-4 py-2 rounded-full bg-brand hover:bg-brand-hover text-white text-xs font-bold transition-colors cursor-pointer disabled:opacity-50"
                         >
                           Ver Desempenho
                         </button>
@@ -1604,8 +1625,8 @@ export const SimuladosWindow: React.FC<SimuladosWindowProps> = ({
                           }}
                           className={`px-5 py-2 rounded-full text-xs font-bold flex items-center gap-1.5 transition-all ${
                             canAccessSimulado
-                              ? 'bg-[#2563eb] hover:bg-[#1d4ed8] text-white shadow-[0_4px_16px_rgba(37,99,235,0.4)] cursor-pointer'
-                              : 'bg-zinc-800 text-zinc-400 cursor-not-allowed'
+                              ? 'bg-brand hover:bg-brand-hover text-white shadow-glow-sm cursor-pointer'
+                              : 'bg-chip text-ink-muted cursor-not-allowed'
                           }`}
                         >
                           <Play className="w-3.5 h-3.5 fill-current" />

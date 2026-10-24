@@ -30,6 +30,7 @@ export interface CalendarModalProps {
   currentUserUid: string;
   students?: Student[];
   userProgress?: UserProgress | null;
+  onVisibleYearChange?: (year: number) => void;
   onSaveEvent: (
     event: Omit<CalendarEvent, 'createdAt' | 'updatedAt'>,
     isNew: boolean
@@ -91,7 +92,7 @@ export const COLOR_PALETTE: Record<
     circleBorder: 'border-blue-400/50',
     highlighterBg: 'bg-blue-500/25',
     badgeBg: 'bg-blue-500/20',
-    badgeText: 'text-blue-200',
+    badgeText: 'text-blue-200 [html.theme-light_&]:text-blue-700',
     dotBg: 'bg-blue-400',
     accentBorder: 'border-blue-500/50',
     glowClass: 'shadow-[0_0_12px_rgba(59,130,246,0.5)]',
@@ -103,7 +104,7 @@ export const COLOR_PALETTE: Record<
     circleBorder: 'border-violet-400/50',
     highlighterBg: 'bg-violet-500/25',
     badgeBg: 'bg-violet-500/20',
-    badgeText: 'text-violet-200',
+    badgeText: 'text-violet-200 [html.theme-light_&]:text-violet-700',
     dotBg: 'bg-violet-400',
     accentBorder: 'border-violet-500/50',
     glowClass: 'shadow-[0_0_12px_rgba(139,92,246,0.5)]',
@@ -115,7 +116,7 @@ export const COLOR_PALETTE: Record<
     circleBorder: 'border-emerald-400/50',
     highlighterBg: 'bg-emerald-500/25',
     badgeBg: 'bg-emerald-500/20',
-    badgeText: 'text-emerald-200',
+    badgeText: 'text-emerald-200 [html.theme-light_&]:text-emerald-700',
     dotBg: 'bg-emerald-400',
     accentBorder: 'border-emerald-500/50',
     glowClass: 'shadow-[0_0_12px_rgba(16,185,129,0.5)]',
@@ -127,7 +128,7 @@ export const COLOR_PALETTE: Record<
     circleBorder: 'border-amber-400/50',
     highlighterBg: 'bg-amber-500/25',
     badgeBg: 'bg-amber-500/20',
-    badgeText: 'text-amber-200',
+    badgeText: 'text-amber-200 [html.theme-light_&]:text-amber-700',
     dotBg: 'bg-amber-400',
     accentBorder: 'border-amber-500/50',
     glowClass: 'shadow-[0_0_12px_rgba(245,158,11,0.5)]',
@@ -139,7 +140,7 @@ export const COLOR_PALETTE: Record<
     circleBorder: 'border-cyan-400/50',
     highlighterBg: 'bg-cyan-500/25',
     badgeBg: 'bg-cyan-500/20',
-    badgeText: 'text-cyan-200',
+    badgeText: 'text-cyan-200 [html.theme-light_&]:text-cyan-700',
     dotBg: 'bg-cyan-400',
     accentBorder: 'border-cyan-500/50',
     glowClass: 'shadow-[0_0_12px_rgba(6,182,212,0.5)]',
@@ -151,7 +152,7 @@ export const COLOR_PALETTE: Record<
     circleBorder: 'border-rose-400/50',
     highlighterBg: 'bg-rose-500/25',
     badgeBg: 'bg-rose-500/20',
-    badgeText: 'text-rose-200',
+    badgeText: 'text-rose-200 [html.theme-light_&]:text-rose-700',
     dotBg: 'bg-rose-400',
     accentBorder: 'border-rose-500/50',
     glowClass: 'shadow-[0_0_12px_rgba(244,63,94,0.5)]',
@@ -163,7 +164,7 @@ export const COLOR_PALETTE: Record<
     circleBorder: 'border-pink-400/50',
     highlighterBg: 'bg-pink-500/25',
     badgeBg: 'bg-pink-500/20',
-    badgeText: 'text-pink-200',
+    badgeText: 'text-pink-200 [html.theme-light_&]:text-pink-700',
     dotBg: 'bg-pink-400',
     accentBorder: 'border-pink-500/50',
     glowClass: 'shadow-[0_0_12px_rgba(236,72,153,0.5)]',
@@ -175,7 +176,7 @@ export const COLOR_PALETTE: Record<
     circleBorder: 'border-indigo-400/50',
     highlighterBg: 'bg-indigo-500/25',
     badgeBg: 'bg-indigo-500/20',
-    badgeText: 'text-indigo-200',
+    badgeText: 'text-indigo-200 [html.theme-light_&]:text-indigo-700',
     dotBg: 'bg-indigo-400',
     accentBorder: 'border-indigo-500/50',
     glowClass: 'shadow-[0_0_12px_rgba(99,102,241,0.5)]',
@@ -187,7 +188,7 @@ export const COLOR_PALETTE: Record<
     circleBorder: 'border-teal-400/50',
     highlighterBg: 'bg-teal-500/25',
     badgeBg: 'bg-teal-500/20',
-    badgeText: 'text-teal-200',
+    badgeText: 'text-teal-200 [html.theme-light_&]:text-teal-700',
     dotBg: 'bg-teal-400',
     accentBorder: 'border-teal-500/50',
     glowClass: 'shadow-[0_0_12px_rgba(20,184,166,0.5)]',
@@ -539,7 +540,6 @@ export function parseBirthDayAndMonth(
   const trimmed = birthDateStr.trim();
   if (!trimmed) return null;
 
-  // DD/MM/YYYY, DD-MM-YYYY or DD.MM.YYYY
   const brMatch = trimmed.match(
     /^(\d{1,2})[\/\-\.](\d{1,2})(?:[\/\-\.]\d{2,4})?$/
   );
@@ -551,7 +551,6 @@ export function parseBirthDayAndMonth(
     }
   }
 
-  // YYYY-MM-DD
   const isoMatch = trimmed.match(/^\d{4}[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})$/);
   if (isoMatch) {
     const m = parseInt(isoMatch[1], 10) - 1;
@@ -579,6 +578,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
   currentUserUid,
   students = [],
   userProgress = null,
+  onVisibleYearChange,
   onSaveEvent,
   onDeleteEvent,
 }) => {
@@ -608,10 +608,9 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
   const [dragAnchorDate, setDragAnchorDate] = useState<string | null>(null);
   const [dragCurrentDate, setDragCurrentDate] = useState<string | null>(null);
 
-  // Synchronous refs for accurate touch and mouse drag tracking without race conditions
   const isDraggingRef = useRef(false);
-  const dragAnchorRef = useRef<string | null>(null);
-  const dragCurrentRef = useRef<string | null>(null);
+  const dragAnchorRef = useRef(null as string | null);
+  const dragCurrentRef = useRef(null as string | null);
   const justOpenedPopupRef = useRef(false);
 
   const [viewMode, setViewMode] = useState<'month' | 'year'>('month');
@@ -620,6 +619,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
   const [isPopupOpen, setIsPopupOpen] = useState(false);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
   const [popupTitle, setPopupTitle] = useState('');
+  const [popupTitleError, setPopupTitleError] = useState('');
   const [popupDescription, setPopupDescription] = useState('');
   const [popupStartDate, setPopupStartDate] = useState(todayStr);
   const [popupEndDate, setPopupEndDate] = useState(todayStr);
@@ -627,6 +627,14 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
   const [popupCategory, setPopupCategory] =
     useState<CalendarEventCategory>('assunto_semana');
   const [isSaving, setIsSaving] = useState(false);
+  const popupTitleRef = useRef<HTMLInputElement>(null);
+
+  // Notify parent when visible year changes (for conditional Firestore query)
+  useEffect(() => {
+    if (isOpen && onVisibleYearChange) {
+      onVisibleYearChange(selectedYear);
+    }
+  }, [isOpen, selectedYear, onVisibleYearChange]);
 
   // Reset states when opened
   useEffect(() => {
@@ -653,6 +661,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
       setViewMode('month');
       setIsPopupOpen(false);
       setEditingEventId(null);
+      setPopupTitleError('');
     }
   }, [isOpen]);
 
@@ -763,7 +772,6 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
       isCurrentMonth: boolean;
     }> = [];
 
-    // Leading days
     if (startWeekday > 0) {
       const prevMonthLastDate = new Date(selectedYear, selectedMonth, 0);
       const prevYear = prevMonthLastDate.getFullYear();
@@ -781,7 +789,6 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
       }
     }
 
-    // Current month days
     for (let d = 1; d <= daysInMonth; d++) {
       cells.push({
         dateStr: toDateStr(selectedYear, selectedMonth, d),
@@ -792,7 +799,6 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
       });
     }
 
-    // Trailing days
     const remainder = cells.length % 7;
     if (remainder > 0) {
       const needed = 7 - remainder;
@@ -825,6 +831,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
       const e = end >= start ? end : start;
       setEditingEventId(null);
       setPopupTitle('');
+      setPopupTitleError('');
       setPopupDescription('');
       setPopupStartDate(s);
       setPopupEndDate(e);
@@ -839,6 +846,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     if (!isAdmin || ev.authorId === 'system') return;
     setEditingEventId(ev.id);
     setPopupTitle(ev.title);
+    setPopupTitleError('');
     setPopupDescription(ev.description || '');
     setPopupStartDate(ev.startDate);
     setPopupEndDate(ev.endDate);
@@ -854,11 +862,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     setIsPopupOpen(true);
   };
 
-  // Day click or touch handling
-  // When Add Mode is NOT active: clicking a day selects that single day (to view its events/holidays/birthdays).
-  // When Add Mode is active: if clicked without dragging, opens popup for that day.
   const handleDayClick = (dateStr: string) => {
-    // If popup was just opened via mouseUp/touchEnd, prevent duplicate invocation from synthetic click
     if (justOpenedPopupRef.current) return;
 
     if (isAdmin && isAddMode) {
@@ -869,13 +873,11 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
       return;
     }
 
-    // Normal view mode: clicking directly selects this single day
     setSelectedDateStr(dateStr);
     setRangeStartStr(dateStr);
     setRangeEndStr(dateStr);
   };
 
-  // Mouse / Touch Handlers for Drag Selection in Add Mode
   const handleDayMouseDown = (dateStr: string) => {
     if (!isAdmin || !isAddMode) return;
     isDraggingRef.current = true;
@@ -921,14 +923,12 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
           justOpenedPopupRef.current = false;
         }, 400);
 
-        // Open popup ONLY after releasing mouse/finger
         openPopupForRange(start, end);
       }
     },
     [isAdmin, isAddMode, openPopupForRange]
   );
 
-  // Global mouseup in case cursor leaves the calendar grid
   useEffect(() => {
     const handleGlobalUp = () => {
       if (isDraggingRef.current) {
@@ -939,17 +939,11 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     return () => window.removeEventListener('mouseup', handleGlobalUp);
   }, [handleDayMouseUp]);
 
-  // Touch handlers for mobile
-  // In View Mode (!isAddMode): dragging does nothing and selects nothing; scrolling works normally.
-  // In Add Mode (isAddMode): dragging tracks days, and popup opens ONLY after lifting finger from screen.
   const handleTouchStart = (dateStr: string) => {
     if (!isAdmin || !isAddMode) {
-      // Normal view mode: do nothing on touch start!
-      // This ensures that dragging/scrolling across days does NOT select any date.
       return;
     }
 
-    // Add mode: start range selection
     isDraggingRef.current = true;
     dragAnchorRef.current = dateStr;
     dragCurrentRef.current = dateStr;
@@ -997,7 +991,6 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
         justOpenedPopupRef.current = false;
       }, 400);
 
-      // Popup ONLY appears after lifting finger from the screen!
       openPopupForRange(start, end);
     }
   };
@@ -1011,7 +1004,6 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     setDragCurrentDate(null);
   };
 
-  // Month navigation
   const handlePrevMonth = () => {
     if (selectedMonth === 0) {
       setSelectedYear((y) => y - 1);
@@ -1030,10 +1022,16 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     }
   };
 
-  // Submit new/edited event
+  // Submit new/edited event with inline validation
   const handleSubmitPopup = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!popupTitle.trim() || !popupStartDate || !popupEndDate) return;
+    if (!popupTitle.trim()) {
+      setPopupTitleError('Informe o título.');
+      popupTitleRef.current?.focus();
+      return;
+    }
+    if (!popupStartDate || !popupEndDate) return;
+    setPopupTitleError('');
     setIsSaving(true);
     try {
       const isNew = !editingEventId;
@@ -1077,17 +1075,17 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[70] bg-[#070b14] overflow-y-auto flex flex-col text-white selection:bg-[#2563eb] selection:text-white">
-      {/* GLOW BACKGROUND EFFECT */}
-      <div className="fixed top-0 left-1/2 -translate-x-1/2 w-[700px] h-[250px] bg-[#2563eb]/20 blur-[130px] pointer-events-none" />
+    <div className="fixed inset-0 z-[70] bg-canvas overflow-y-auto overflow-x-hidden flex flex-col text-ink selection:bg-brand selection:text-white">
+      {/* RADIAL GRADIENT BACKGROUND EFFECT (GPU-FREE) */}
+      <div className="fixed top-0 left-1/2 -translate-x-1/2 w-[540px] max-w-[140vw] h-[250px] bg-[radial-gradient(closest-side,rgba(37,99,235,0.20),transparent)] pointer-events-none" />
 
       {/* TOP SCREEN HEADER BAR */}
-      <header className="sticky top-0 z-40 bg-[#070b14]/90 backdrop-blur-md px-4 sm:px-8 py-3.5 border-b border-white/5 flex items-center justify-between gap-3 shrink-0">
+      <header className="sticky top-0 z-40 bg-canvas/90 backdrop-blur-md px-4 sm:px-8 py-3.5 border-b border-line-soft flex items-center justify-between gap-3 shrink-0">
         <div className="flex items-center gap-3 min-w-0">
           <button
             type="button"
             onClick={onClose}
-            className="w-9 h-9 rounded-full bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer shrink-0"
+            className="w-9 h-9 rounded-full bg-chip hover:bg-chip-hover text-ink-2 hover:text-ink flex items-center justify-center transition-colors cursor-pointer shrink-0"
             title="Voltar / Fechar"
             aria-label="Voltar"
           >
@@ -1095,11 +1093,11 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
           </button>
 
           <div className="min-w-0 flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-full bg-[#2563eb] text-white flex items-center justify-center shadow-[0_0_14px_rgba(37,99,235,0.5)] shrink-0">
+            <div className="w-8 h-8 rounded-full bg-brand text-white flex items-center justify-center shadow-glow-sm shrink-0">
               <CalendarIcon className="w-4 h-4" />
             </div>
             <div className="truncate">
-              <h1 className="text-base sm:text-lg font-extrabold text-white tracking-tight truncate">
+              <h1 className="text-base sm:text-lg font-extrabold text-ink tracking-tight truncate">
                 Calendário {selectedYear}
               </h1>
             </div>
@@ -1115,8 +1113,8 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
             }
             className={`px-3 py-1.5 rounded-full text-xs font-bold flex items-center gap-1.5 border transition-all cursor-pointer ${
               viewMode === 'year'
-                ? 'bg-[#2563eb] border-[#60a5fa] text-white'
-                : 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300'
+                ? 'bg-brand border-brand-soft text-white'
+                : 'bg-chip hover:bg-chip-hover border-line text-ink-2'
             }`}
           >
             <LayoutGrid className="w-3.5 h-3.5" />
@@ -1140,7 +1138,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
               className={`px-3.5 py-1.5 rounded-full text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
                 isAddMode
                   ? 'bg-emerald-500 hover:bg-emerald-600 text-white shadow-[0_0_16px_rgba(16,185,129,0.5)] ring-2 ring-emerald-300'
-                  : 'bg-[#2563eb] hover:bg-[#1d4ed8] text-white shadow-[0_4px_16px_rgba(37,99,235,0.4)]'
+                  : 'bg-brand hover:bg-brand-hover text-white shadow-glow-sm'
               }`}
             >
               {isAddMode ? (
@@ -1160,7 +1158,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="w-9 h-9 rounded-full bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+            className="w-9 h-9 rounded-full bg-chip hover:bg-chip-hover text-ink-muted hover:text-ink flex items-center justify-center transition-colors cursor-pointer"
             title="Fechar"
             aria-label="Fechar"
           >
@@ -1171,7 +1169,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
 
       {/* HELPER BANNER WHEN ADD MODE IS ACTIVATED BY ADMIN */}
       {isAdmin && isAddMode && (
-        <div className="bg-emerald-950/70 border-b border-emerald-500/30 px-4 py-2.5 flex items-center justify-between gap-3 text-xs font-semibold text-emerald-200">
+        <div className="bg-emerald-500/15 border-b border-emerald-500/30 px-4 py-2.5 flex items-center justify-between gap-3 text-xs font-semibold text-emerald-300 [html.theme-light_&]:text-emerald-800">
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
             <span>
@@ -1183,16 +1181,16 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
           <button
             type="button"
             onClick={() => setIsAddMode(false)}
-            className="px-2.5 py-1 rounded-full bg-emerald-800/60 hover:bg-emerald-700/80 text-[11px] font-bold text-white shrink-0 cursor-pointer"
+            className="px-2.5 py-1 rounded-full bg-emerald-600 hover:bg-emerald-700 text-[11px] font-bold text-white shrink-0 cursor-pointer"
           >
             Desativar
           </button>
         </div>
       )}
 
-      {/* MAIN SCREEN BODY (BORDERLESS / SEM MOLDURA) */}
+      {/* MAIN SCREEN BODY */}
       <main className="flex-1 w-full max-w-5xl mx-auto px-3 sm:px-6 md:px-8 py-5 sm:py-7 pb-24 md:pb-8 space-y-6">
-        {/* MONTH SWITCHER (CLEAN, NO CLUTTERED PILLS ROW & NO IR PARA HOJE) */}
+        {/* MONTH SWITCHER */}
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -1201,13 +1199,13 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                 ? () => setSelectedYear((y) => y - 1)
                 : handlePrevMonth
             }
-            className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 text-slate-200 flex items-center justify-center transition-colors cursor-pointer"
+            className="w-8 h-8 rounded-full bg-chip hover:bg-chip-hover text-ink-2 flex items-center justify-center transition-colors cursor-pointer"
             title="Mês anterior"
           >
-            <ChevronLeft className="w-4 h-4 text-[#60a5fa]" />
+            <ChevronLeft className="w-4 h-4 text-brand-soft" />
           </button>
 
-          <span className="text-base sm:text-lg font-extrabold text-white px-1">
+          <span className="text-base sm:text-lg font-extrabold text-ink px-1">
             {viewMode === 'year'
               ? `Ano ${selectedYear}`
               : `${MONTH_NAMES[selectedMonth]} ${selectedYear}`}
@@ -1220,10 +1218,10 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                 ? () => setSelectedYear((y) => y + 1)
                 : handleNextMonth
             }
-            className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 text-slate-200 flex items-center justify-center transition-colors cursor-pointer"
+            className="w-8 h-8 rounded-full bg-chip hover:bg-chip-hover text-ink-2 flex items-center justify-center transition-colors cursor-pointer"
             title="Próximo mês"
           >
-            <ChevronRight className="w-4 h-4 text-[#60a5fa]" />
+            <ChevronRight className="w-4 h-4 text-brand-soft" />
           </button>
         </div>
 
@@ -1245,22 +1243,22 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                   }}
                   className={`p-3.5 rounded-2xl transition-all cursor-pointer ${
                     isPresentMonth
-                      ? 'bg-[#0f1b33] border border-[#3b82f6]/60 shadow-[0_0_20px_rgba(37,99,235,0.25)]'
-                      : 'bg-[#0a1224] border border-white/5 hover:border-[#3b82f6]/40'
+                      ? 'bg-surface-2 border border-brand-soft/60 shadow-glow-sm'
+                      : 'bg-surface border border-line hover:border-brand-soft/40 shadow-card'
                   }`}
                 >
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-extrabold text-white">
+                    <span className="text-xs font-extrabold text-ink">
                       {mName}
                     </span>
                     {isPresentMonth && (
-                      <span className="w-2 h-2 rounded-full bg-[#3b82f6]" />
+                      <span className="w-2 h-2 rounded-full bg-brand-soft" />
                     )}
                   </div>
 
                   <div className="grid grid-cols-7 gap-1 text-center mb-1">
                     {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((d, i) => (
-                      <span key={i} className="text-[9px] font-bold text-slate-500">
+                      <span key={i} className="text-[9px] font-bold text-ink-muted">
                         {d}
                       </span>
                     ))}
@@ -1307,10 +1305,10 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                             }}
                             className={`w-5 h-5 mx-auto rounded-full text-[9px] font-bold flex items-center justify-center transition-transform hover:scale-110 ${
                               isToday
-                                ? 'bg-[#2563eb] text-white ring-1 ring-blue-300'
+                                ? 'bg-brand text-white ring-1 ring-blue-300'
                                 : palette
                                   ? `${palette.dotBg} text-black font-extrabold`
-                                  : 'text-slate-400 hover:bg-white/10'
+                                  : 'text-ink-muted hover:bg-chip-hover'
                             }`}
                           >
                             {dNum}
@@ -1324,7 +1322,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
             })}
           </div>
         ) : (
-          /* VIEW MODE 2: BORDERLESS MONTH CALENDAR (NO HEAVY OUTER FRAME / SEM MOLDURA) */
+          /* VIEW MODE 2: BORDERLESS MONTH CALENDAR */
           <div
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
@@ -1333,12 +1331,12 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
               isAddMode ? 'touch-none' : 'touch-auto'
             }`}
           >
-            {/* Weekdays Labels (Exact 7-column grid without gap shift) */}
-            <div className="grid grid-cols-7 text-center pb-2.5 border-b border-white/5">
+            {/* Weekdays Labels */}
+            <div className="grid grid-cols-7 text-center pb-2.5 border-b border-line-soft">
               {WEEKDAYS_SHORT.map((wd) => (
                 <div
                   key={wd}
-                  className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 py-0.5"
+                  className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-ink-muted py-0.5"
                 >
                   {wd}
                 </div>
@@ -1352,7 +1350,6 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                   {weekRow.map((cell, colIdx) => {
                     const { dateStr, dayNumber, month0, isCurrentMonth } = cell;
 
-                    // Range state for Add Mode drag
                     const isInActiveRange =
                       isAddMode &&
                       dateStr >= activeRange.start &&
@@ -1363,7 +1360,6 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                     const isSelected = dateStr === selectedDateStr;
                     const isToday = dateStr === todayStr;
 
-                    // Events on this day
                     const dayEvents = allYearEvents.filter(
                       (ev) => dateStr >= ev.startDate && dateStr <= ev.endDate
                     );
@@ -1384,7 +1380,6 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                     const isSingleDayEvent =
                       !isMultiDay && primaryEvent && primaryEvent.startDate === primaryEvent.endDate;
 
-                    // Dots rule: "a bolinha é apenas para simulados revisão ou eventos do curso"
                     const eventsWithDots = dayEvents.filter(
                       (ev) =>
                         ev.category === 'simulado' ||
@@ -1392,17 +1387,15 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                         ev.category === 'evento_curso'
                     );
 
-                    // Birthdays on this specific day
                     const dayBirthdays = allBirthdays.filter(
                       (b) => b.day === dayNumber && b.month0 === month0
                     );
 
-                    // Multi-day highlighter band classes (Centered with number circles)
                     const getMultiDayBandClasses = (ev: CalendarEvent) => {
                       const isStartOfEvent = dateStr === ev.startDate;
                       const isEndOfEvent = dateStr === ev.endDate;
-                      const isRowStart = colIdx === 0; // Sunday
-                      const isRowEnd = colIdx === 6;   // Saturday
+                      const isRowStart = colIdx === 0;
+                      const isRowEnd = colIdx === 6;
 
                       if (isStartOfEvent && isEndOfEvent) {
                         return 'left-1 right-1 rounded-full border-x';
@@ -1442,41 +1435,39 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                       return 'left-0 right-0 rounded-none';
                     };
 
-                    // Compute perfect circle styling
                     const getCircleClasses = () => {
                       if (isInActiveRange) {
                         if (isRangeStart || isRangeEnd) {
                           return 'bg-emerald-500 text-white shadow-[0_0_14px_rgba(16,185,129,0.9)] scale-105';
                         }
-                        return 'text-emerald-100 font-bold';
+                        return 'text-emerald-200 [html.theme-light_&]:text-emerald-800 font-bold';
                       }
 
                       if (isSelected) {
-                        return 'bg-[#2563eb] text-white shadow-[0_0_16px_rgba(37,99,235,0.85)] scale-105 ring-2 ring-white/60';
+                        return 'bg-brand text-white shadow-glow-md scale-105 ring-2 ring-white/60';
                       }
 
                       if (isToday) {
-                        return 'border-2 border-[#60a5fa] text-white font-black bg-[#2563eb]/20 shadow-[0_0_12px_rgba(96,165,250,0.4)]';
+                        return 'border-2 border-brand-soft text-ink font-extrabold bg-brand/20 shadow-glow-sm';
                       }
 
-                      // Feriado: marcação em vermelho no círculo do dia (sem bolinha)
                       if (holidayEvent) {
-                        return 'bg-rose-500/25 border-2 border-rose-500/80 text-rose-100 font-black shadow-[0_0_12px_rgba(244,63,94,0.4)]';
+                        return 'bg-rose-500/25 border-2 border-rose-500/80 text-rose-100 [html.theme-light_&]:text-rose-800 font-extrabold shadow-[0_0_12px_rgba(244,63,94,0.4)]';
                       }
 
                       if (isSingleDayEvent) {
-                        return `${pal.circleBg} border-2 ${pal.accentBorder} text-white font-extrabold shadow-sm`;
+                        return `${pal.circleBg} border-2 ${pal.accentBorder} text-ink font-extrabold shadow-sm`;
                       }
 
                       if (isMultiDay) {
-                        return 'text-white font-black';
+                        return 'text-ink font-extrabold';
                       }
 
                       if (isCurrentMonth) {
-                        return 'text-slate-200 group-hover:bg-white/10';
+                        return 'text-ink-2 group-hover:bg-chip-hover';
                       }
 
-                      return 'text-slate-600 group-hover:text-slate-400';
+                      return 'text-ink-faint group-hover:text-ink-muted';
                     };
 
                     return (
@@ -1490,7 +1481,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                         onTouchStart={() => handleTouchStart(dateStr)}
                         className="relative flex items-center justify-center h-14 sm:h-16 cursor-pointer group transition-all select-none"
                       >
-                        {/* MULTI-DAY EVENT CONTINUOUS BAND (CENTERED EXACTLY WITH THE NUMBERS) */}
+                        {/* MULTI-DAY EVENT CONTINUOUS BAND */}
                         {isMultiDay && !isInActiveRange && (
                           <div
                             className={`absolute top-1/2 -translate-y-1/2 h-9 sm:h-10 pointer-events-none transition-all z-0 ${
@@ -1501,14 +1492,14 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                           />
                         )}
 
-                        {/* DRAG / ACTIVE RANGE HIGHLIGHT BAND (CENTERED EXACTLY WITH THE NUMBERS) */}
+                        {/* DRAG / ACTIVE RANGE HIGHLIGHT BAND */}
                         {isInActiveRange && (
                           <div
                             className={`absolute top-1/2 -translate-y-1/2 h-9 sm:h-10 pointer-events-none bg-emerald-500/25 border-y border-emerald-400/40 z-0 ${getDragBandClasses()}`}
                           />
                         )}
 
-                        {/* TINY BIRTHDAY CAKE SYMBOL ON TOP (ABSOLUTELY POSITIONED SO IT NEVER SHIFTS THE NUMBER) */}
+                        {/* TINY BIRTHDAY CAKE SYMBOL ON TOP */}
                         {dayBirthdays.length > 0 && (
                           <span
                             className="absolute top-0.5 left-1/2 -translate-x-1/2 text-[9px] sm:text-[10px] leading-none select-none pointer-events-none z-20 filter drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]"
@@ -1520,15 +1511,14 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                           </span>
                         )}
 
-                        {/* PERFECT CIRCULAR DAY NUMBER (100% UNIFORM BASELINE & CENTERED) */}
+                        {/* PERFECT CIRCULAR DAY NUMBER */}
                         <div
                           className={`relative z-10 w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-xs sm:text-sm font-extrabold aspect-square select-none transition-all ${getCircleClasses()}`}
                         >
                           {dayNumber}
                         </div>
 
-                        {/* PURE COLOR EVENT DOTS (ABSOLUTELY POSITIONED AT BOTTOM, NO NUMBER DISPLACEMENT) */}
-                        {/* Assunto de aula não exibe bolinha, apenas a marcação. Feriados = bolinha vermelha, evento/simulado = azul, revisão = amarela */}
+                        {/* PURE COLOR EVENT DOTS */}
                         {eventsWithDots.length > 0 && (
                           <div className="absolute bottom-1 inset-x-0 flex items-center justify-center gap-1 pointer-events-none z-20">
                             {eventsWithDots.slice(0, 3).map((ev) => {
@@ -1553,41 +1543,40 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
           </div>
         )}
 
-        {/* BOTTOM SCHEDULE SECTION: SLANTED / INCLINADO DISPLAY OF SELECTED DAY / PERIOD */}
-        <section className="pt-2 border-t border-white/5 space-y-3">
-          {/* SCHEDULE ITEMS (SLANTED / INCLINADO) */}
+        {/* BOTTOM SCHEDULE SECTION */}
+        <section className="pt-2 border-t border-line-soft space-y-3">
           {selectedScheduleEvents.length === 0 &&
           selectedDateBirthdays.length === 0 ? (
-            <div className="p-6 rounded-2xl bg-white/[0.02] border border-white/5 text-center transform -skew-x-1 sm:-skew-x-2">
-              <p className="text-xs sm:text-sm font-semibold text-slate-400 italic">
+            <div className="p-6 rounded-2xl bg-surface border border-line-soft text-center transform -skew-x-1 sm:-skew-x-2">
+              <p className="text-xs sm:text-sm font-semibold text-ink-muted italic">
                 Nenhuma programação ou evento agendado para este dia.
               </p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-              {/* BIRTHDAY CARDS (SLANTED WITH CAKE) */}
+              {/* BIRTHDAY CARDS */}
               {selectedDateBirthdays.map((b) => (
                 <div
                   key={`bday-${b.id}`}
                   className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-amber-500/10 to-transparent border border-amber-400/40 shadow-[0_4px_20px_rgba(245,158,11,0.15)] flex items-start justify-between gap-3 transform -skew-x-2 transition-transform hover:-skew-x-1"
                 >
                   <div className="flex items-start gap-3 min-w-0">
-                    <div className="w-8 h-8 rounded-full bg-amber-500/25 border border-amber-400/50 text-amber-300 flex items-center justify-center shrink-0 mt-0.5">
+                    <div className="w-8 h-8 rounded-full bg-amber-500/25 border border-amber-400/50 text-amber-400 [html.theme-light_&]:text-amber-700 flex items-center justify-center shrink-0 mt-0.5">
                       <Cake className="w-4 h-4" />
                     </div>
                     <div className="min-w-0 space-y-1">
                       <div className="flex items-center gap-2">
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-500/20 text-amber-200 italic uppercase tracking-wider">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-500/20 text-amber-300 [html.theme-light_&]:text-amber-800 italic uppercase tracking-wider">
                           🎂 Aniversariante
                         </span>
-                        <span className="text-[10px] font-bold text-amber-300/80 italic">
+                        <span className="text-[10px] font-bold text-amber-400 [html.theme-light_&]:text-amber-700 italic">
                           Hoje!
                         </span>
                       </div>
-                      <h3 className="text-sm sm:text-base font-extrabold text-white italic tracking-wide truncate">
+                      <h3 className="text-sm sm:text-base font-extrabold text-ink italic tracking-wide truncate">
                         {b.name}
                       </h3>
-                      <p className="text-[11px] text-amber-200/80 italic font-medium">
+                      <p className="text-[11px] text-ink-2 italic font-medium">
                         Dia de celebrar mais um ano de vida e conquistas!
                       </p>
                     </div>
@@ -1595,7 +1584,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                 </div>
               ))}
 
-              {/* EVENT CARDS (SLANTED / INCLINADO) */}
+              {/* EVENT CARDS */}
               {selectedScheduleEvents.map((ev) => {
                 const pal = COLOR_PALETTE[ev.color] || COLOR_PALETTE.blue;
                 const isSystemHoliday = ev.authorId === 'system';
@@ -1604,9 +1593,8 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                 return (
                   <div
                     key={ev.id}
-                    className={`relative p-4 rounded-2xl bg-[#0d1527]/95 border ${pal.accentBorder} flex items-start justify-between gap-3 transform -skew-x-2 transition-transform hover:-skew-x-1 overflow-hidden shadow-lg`}
+                    className={`relative p-4 rounded-2xl bg-surface border ${pal.accentBorder} flex items-start justify-between gap-3 transform -skew-x-2 transition-transform hover:-skew-x-1 overflow-hidden shadow-card`}
                   >
-                    {/* Left Slanted Color Accent Bar */}
                     <div
                       className={`absolute left-0 top-0 bottom-0 w-1.5 ${pal.pillBg}`}
                     />
@@ -1617,7 +1605,6 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                       />
 
                       <div className="min-w-0 space-y-1">
-                        {/* Slanted Badges & Date Range */}
                         <div className="flex flex-wrap items-center gap-2">
                           <span
                             className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold italic uppercase tracking-wider ${pal.badgeBg} ${pal.badgeText}`}
@@ -1635,7 +1622,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                                       : 'Feriado Pará'}
                           </span>
 
-                          <span className="text-[11px] font-bold text-blue-300 italic">
+                          <span className="text-[11px] font-bold text-brand-soft italic">
                             {spansMultipleDays
                               ? `Período: ${formatShortDateRange(
                                   ev.startDate,
@@ -1645,14 +1632,12 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                           </span>
                         </div>
 
-                        {/* Slanted Event Title */}
-                        <h3 className="text-sm sm:text-base font-extrabold text-white italic tracking-wide leading-snug">
+                        <h3 className="text-sm sm:text-base font-extrabold text-ink italic tracking-wide leading-snug">
                           {ev.title}
                         </h3>
 
-                        {/* Slanted Description */}
                         {ev.description && (
-                          <p className="text-xs text-slate-300/85 italic font-medium leading-relaxed">
+                          <p className="text-xs text-ink-2 italic font-medium leading-relaxed">
                             {ev.description}
                           </p>
                         )}
@@ -1665,7 +1650,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                         <button
                           type="button"
                           onClick={() => openPopupForEdit(ev)}
-                          className="w-7 h-7 rounded-full bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+                          className="w-7 h-7 rounded-full bg-chip hover:bg-chip-hover text-ink-2 hover:text-ink flex items-center justify-center transition-colors cursor-pointer"
                           title="Editar"
                         >
                           <Edit3 className="w-3.5 h-3.5" />
@@ -1673,7 +1658,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                         <button
                           type="button"
                           onClick={() => onDeleteEvent(ev.id)}
-                          className="w-7 h-7 rounded-full bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 flex items-center justify-center transition-colors cursor-pointer"
+                          className="w-7 h-7 rounded-full bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 flex items-center justify-center transition-colors cursor-pointer"
                           title="Excluir"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -1688,7 +1673,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
         </section>
       </main>
 
-      {/* POPUP MODAL TO ADD / EDIT EVENT (SLANTED / MINIMALIST DIALOG) */}
+      {/* POPUP MODAL TO ADD / EDIT EVENT */}
       {isAdmin && isPopupOpen && (
         <div
           onClick={() => {
@@ -1699,11 +1684,11 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md rounded-3xl bg-[#0d1527] border border-[#3b82f6]/40 p-5 sm:p-6 shadow-[0_25px_80px_rgba(0,0,0,0.9)] space-y-4 relative"
+            className="w-full max-w-md rounded-3xl bg-surface border border-brand-soft/40 p-5 sm:p-6 shadow-pop space-y-4 relative"
           >
-            <div className="flex items-center justify-between pb-2 border-b border-white/10">
-              <h3 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-[#2563eb]" />
+            <div className="flex items-center justify-between pb-2 border-b border-line">
+              <h3 className="text-sm sm:text-base font-extrabold text-ink flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-brand" />
                 <span>
                   {editingEventId
                     ? 'Editar Evento / Assunto'
@@ -1716,13 +1701,13 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                   setIsPopupOpen(false);
                   setEditingEventId(null);
                 }}
-                className="w-7 h-7 rounded-full bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white flex items-center justify-center cursor-pointer"
+                className="w-7 h-7 rounded-full bg-chip hover:bg-chip-hover text-ink-muted hover:text-ink flex items-center justify-center cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleSubmitPopup} className="space-y-3.5">
+            <form noValidate onSubmit={handleSubmitPopup} className="space-y-3.5">
               {/* Category Pills */}
               <div className="flex flex-wrap gap-1.5">
                 {CATEGORY_OPTIONS.map((cat) => {
@@ -1743,8 +1728,8 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                       }}
                       className={`px-3 py-1.5 rounded-full text-[11px] font-bold flex items-center gap-1.5 border transition-all cursor-pointer ${
                         active
-                          ? 'bg-[#2563eb] border-[#60a5fa] text-white shadow-[0_0_12px_rgba(37,99,235,0.4)]'
-                          : 'bg-[#0a1224] border-white/10 text-slate-300 hover:text-white'
+                          ? 'bg-brand border-brand-soft text-white shadow-glow-sm'
+                          : 'bg-surface-2 border-line text-ink-2 hover:text-ink'
                       }`}
                     >
                       {isAssunto ? (
@@ -1760,57 +1745,63 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
 
               {/* Title Input */}
               <div>
-                <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                <label className="block text-[11px] font-semibold text-ink-2 mb-1">
                   Nome do Evento / Assunto da Semana
                 </label>
                 <input
+                  ref={popupTitleRef}
                   type="text"
-                  required
                   maxLength={160}
                   value={popupTitle}
-                  onChange={(e) => setPopupTitle(e.target.value)}
+                  onChange={(e) => {
+                    setPopupTitle(e.target.value);
+                    if (popupTitleError) setPopupTitleError('');
+                  }}
                   placeholder="Ex: Cinemática e Leis de Newton"
-                  className="w-full px-3.5 py-2.5 rounded-2xl bg-[#070b14] border border-white/10 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#3b82f6]"
+                  className={`w-full px-3.5 py-2.5 rounded-2xl bg-inset border ${
+                    popupTitleError ? 'border-danger focus:border-danger' : 'border-line focus:border-brand-soft'
+                  } text-xs text-ink placeholder-ink-faint focus:outline-none`}
                   autoFocus
                 />
+                {popupTitleError && (
+                  <p className="text-xs text-danger mt-1">{popupTitleError}</p>
+                )}
               </div>
 
               {/* Date Period Inputs */}
               <div className="grid grid-cols-2 gap-2.5">
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                  <label className="block text-[11px] font-semibold text-ink-muted mb-1">
                     Início
                   </label>
                   <input
                     type="date"
-                    required
                     value={popupStartDate}
                     onChange={(e) => {
                       const v = e.target.value;
                       setPopupStartDate(v);
                       if (popupEndDate < v) setPopupEndDate(v);
                     }}
-                    className="w-full px-3 py-2 rounded-xl bg-[#070b14] border border-white/10 text-xs text-white focus:outline-none focus:border-[#3b82f6]"
+                    className="w-full px-3 py-2 rounded-xl bg-inset border border-line text-xs text-ink focus:outline-none focus:border-brand-soft"
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                  <label className="block text-[11px] font-semibold text-ink-muted mb-1">
                     Término
                   </label>
                   <input
                     type="date"
-                    required
                     min={popupStartDate}
                     value={popupEndDate}
                     onChange={(e) => setPopupEndDate(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-[#070b14] border border-white/10 text-xs text-white focus:outline-none focus:border-[#3b82f6]"
+                    className="w-full px-3 py-2 rounded-xl bg-inset border border-line text-xs text-ink focus:outline-none focus:border-brand-soft"
                   />
                 </div>
               </div>
 
               {/* Description Textarea */}
               <div>
-                <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                <label className="block text-[11px] font-semibold text-ink-muted mb-1">
                   Descrição ou Observações (opcional)
                 </label>
                 <textarea
@@ -1819,17 +1810,17 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                   value={popupDescription}
                   onChange={(e) => setPopupDescription(e.target.value)}
                   placeholder="Detalhes adicionais para os alunos..."
-                  className="w-full px-3.5 py-2 rounded-2xl bg-[#070b14] border border-white/10 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#3b82f6]"
+                  className="w-full px-3.5 py-2 rounded-2xl bg-inset border border-line text-xs text-ink placeholder-ink-faint focus:outline-none focus:border-brand-soft"
                 />
               </div>
 
-              {/* Pure Color Selector - Somente exibido para 'Evento do Curso' */}
+              {/* Pure Color Selector - 5-column mobile grid */}
               {popupCategory === 'evento_curso' && (
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-400 mb-1.5">
+                  <label className="block text-[11px] font-semibold text-ink-muted mb-1.5">
                     Cor do Evento
                   </label>
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="grid grid-cols-5 sm:flex sm:flex-wrap gap-2">
                     {(Object.keys(COLOR_PALETTE) as CalendarEventColor[]).map(
                       (cKey) => {
                         const pal = COLOR_PALETTE[cKey];
@@ -1840,19 +1831,19 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                             type="button"
                             onClick={() => setPopupColor(cKey)}
                             title={pal.label}
-                            className={`w-7 h-7 rounded-full flex items-center justify-center border transition-all cursor-pointer ${
+                            className={`w-10 h-10 rounded-full mx-auto flex items-center justify-center border transition-all cursor-pointer ${
                               pal.circleBg
                             } ${pal.circleBorder} ${
                               selected
-                                ? 'ring-2 ring-white scale-110 shadow-[0_0_12px_rgba(255,255,255,0.4)]'
+                                ? 'ring-2 ring-ink scale-110 shadow-glow-sm'
                                 : 'opacity-70 hover:opacity-100'
                             }`}
                           >
                             <span
-                              className={`w-3.5 h-3.5 rounded-full ${pal.dotBg} flex items-center justify-center`}
+                              className={`w-4 h-4 rounded-full ${pal.dotBg} flex items-center justify-center`}
                             >
                               {selected && (
-                                <Check className="w-2 h-2 text-black stroke-[3]" />
+                                <Check className="w-2.5 h-2.5 text-black stroke-[3]" />
                               )}
                             </span>
                           </button>
@@ -1871,14 +1862,14 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                     setIsPopupOpen(false);
                     setEditingEventId(null);
                   }}
-                  className="px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 text-xs font-bold text-slate-300 transition-colors cursor-pointer"
+                  className="px-4 py-2 rounded-full bg-chip hover:bg-chip-hover text-xs font-bold text-ink-2 transition-colors cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={isSaving}
-                  className="px-6 py-2 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold shadow-[0_4px_16px_rgba(37,99,235,0.4)] transition-all cursor-pointer disabled:opacity-50"
+                  className="px-6 py-2 rounded-full bg-brand hover:bg-brand-hover text-white text-xs font-bold shadow-glow-sm transition-all cursor-pointer disabled:opacity-50"
                 >
                   {isSaving ? 'Salvando...' : 'Salvar Evento'}
                 </button>

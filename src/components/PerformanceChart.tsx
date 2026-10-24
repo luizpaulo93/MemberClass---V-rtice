@@ -19,14 +19,6 @@ interface PerformanceChartProps {
   onSelectPoint: (id: string) => void;
 }
 
-/**
- * Performance Chart:
- * - Adaptive surface (deep dark plum #1a1125 in Dark Mode, crisp white with soft violet grid in Light Mode)
- * - Vertical bars with top-to-bottom orange-to-crimson gradient (#f59e0b -> #ea580c -> #e11d48)
- * - Compact distance between bars (not spread far apart)
- * - The LAST bar (points[points.length - 1]) is ALWAYS centered horizontally in the plot viewport
- * - Clicking any bar or vertex opens the detailed report window for that exam
- */
 export const PerformanceChart: React.FC<PerformanceChartProps> = ({
   points,
   minY = 300,
@@ -127,7 +119,7 @@ export const PerformanceChart: React.FC<PerformanceChartProps> = ({
   };
 
   return (
-    <div className="performance-chart-card w-full rounded-2xl bg-[#1a1125] border border-white/10 p-4 md:p-5 shadow-xl">
+    <div className="w-full rounded-2xl bg-surface border border-line p-4 md:p-5 shadow-card">
       <div className="flex items-stretch">
         {/* Fixed Left Y-Axis Labels Column */}
         <div
@@ -140,7 +132,7 @@ export const PerformanceChart: React.FC<PerformanceChartProps> = ({
               <span
                 key={stepVal}
                 style={{ top: `${y}px` }}
-                className="absolute right-2 -translate-y-1/2 text-slate-400 text-[11px] font-semibold tabular-nums leading-none"
+                className="absolute right-2 -translate-y-1/2 text-ink-muted text-[11px] font-semibold tabular-nums leading-none"
               >
                 {formatY(stepVal)}
               </span>
@@ -177,8 +169,7 @@ export const PerformanceChart: React.FC<PerformanceChartProps> = ({
                   y1={y}
                   x2={svgWidth}
                   y2={y}
-                  className="chart-grid-line"
-                  stroke="rgba(255, 255, 255, 0.12)"
+                  className="stroke-line"
                   strokeWidth="1"
                 />
               );
@@ -216,7 +207,7 @@ export const PerformanceChart: React.FC<PerformanceChartProps> = ({
                   x={c.cx}
                   y={Math.max(14, c.barTopY - 7)}
                   textAnchor="middle"
-                  className="chart-score-label fill-white text-[11px] font-bold tabular-nums"
+                  className="fill-ink text-[11px] font-bold tabular-nums"
                 >
                   {c.displayScore}
                 </text>
@@ -226,7 +217,7 @@ export const PerformanceChart: React.FC<PerformanceChartProps> = ({
                   x={c.cx}
                   y={padTop + plotHeight + 22}
                   textAnchor="middle"
-                  className="chart-axis-label fill-slate-300 group-hover:fill-white text-[11px] font-semibold transition-colors"
+                  className="fill-ink-muted group-hover:fill-ink text-[11px] font-semibold transition-colors"
                 >
                   {c.shortLabel}
                 </text>
@@ -237,10 +228,9 @@ export const PerformanceChart: React.FC<PerformanceChartProps> = ({
             <path
               d={buildSmoothPath()}
               fill="none"
-              stroke="#ffffff"
               strokeWidth="2.2"
               strokeLinecap="round"
-              className="chart-curve-line pointer-events-none drop-shadow-[0_2px_6px_rgba(0,0,0,0.35)]"
+              className="stroke-brand pointer-events-none"
             />
 
             {/* Curve Vertices */}
@@ -255,8 +245,8 @@ export const PerformanceChart: React.FC<PerformanceChartProps> = ({
                   cx={c.cx}
                   cy={c.lineY}
                   r="3.8"
-                  fill="#ffffff"
-                  className="chart-curve-dot"
+                  strokeWidth="1.5"
+                  className="fill-brand stroke-surface"
                 />
               </g>
             ))}
