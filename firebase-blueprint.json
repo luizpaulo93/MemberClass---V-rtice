@@ -1,0 +1,814 @@
+{
+  "entities": {
+    "Lesson": {
+      "title": "Lesson",
+      "description": "Independent video lesson hosted on YouTube with custom stealth player and multiple PDF attachments.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Lesson title (1 to 160 chars)"
+        },
+        "description": {
+          "type": "string",
+          "description": "Lesson summary, text or links (0 to 4000 chars)"
+        },
+        "youtubeId": {
+          "type": "string",
+          "description": "11-char YouTube video ID"
+        },
+        "duration": {
+          "type": "string",
+          "description": "Formatted duration label e.g. 18:40"
+        },
+        "thumbnailUrl": {
+          "type": "string",
+          "description": "Vertical cover image URL, preset ID, or base64 data URL (0 to 900000 chars)"
+        },
+        "pdfs": {
+          "type": "array",
+          "description": "Bounded list of up to 20 PDF attachments for this lesson",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" },
+              "url": { "type": "string" },
+              "sizeLabel": { "type": "string" }
+            },
+            "required": ["id", "title", "url", "sizeLabel"]
+          }
+        },
+        "folderId": {
+          "type": "string",
+          "description": "Optional ID of the LessonFolder this lesson belongs to (0 to 128 chars)"
+        },
+        "isFree": {
+          "type": "boolean",
+          "description": "Whether this lesson is unlocked for free trial users"
+        },
+        "isPublished": {
+          "type": "boolean",
+          "description": "Whether this lesson is visible to students"
+        },
+        "authorId": {
+          "type": "string",
+          "description": "UID of the admin who created the lesson"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "title",
+        "description",
+        "youtubeId",
+        "duration",
+        "thumbnailUrl",
+        "pdfs",
+        "isFree",
+        "isPublished",
+        "authorId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "LessonFolder": {
+      "title": "LessonFolder",
+      "description": "Folder that organizes video/PDF lessons created by the administrator.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Folder name (1 to 120 chars)"
+        },
+        "isPublished": {
+          "type": "boolean"
+        },
+        "authorId": {
+          "type": "string",
+          "description": "Admin UID who created the folder"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "name",
+        "isPublished",
+        "authorId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Playlist": {
+      "title": "Playlist",
+      "description": "Ordered sequence of lessons forming a thematic track or module.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Playlist title (1 to 160 chars)"
+        },
+        "description": {
+          "type": "string",
+          "description": "Playlist description (0 to 1500 chars)"
+        },
+        "coverUrl": {
+          "type": "string",
+          "description": "Vertical cover image URL or data URL (0 to 900000 chars)"
+        },
+        "lessonIds": {
+          "type": "array",
+          "description": "Ordered list of up to 100 lesson IDs",
+          "items": { "type": "string" }
+        },
+        "isPublished": {
+          "type": "boolean"
+        },
+        "authorId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "title",
+        "description",
+        "coverUrl",
+        "lessonIds",
+        "isPublished",
+        "authorId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Course": {
+      "title": "Course",
+      "description": "Complete course package composed of multiple playlists and vertical cover art.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Course title (1 to 160 chars)"
+        },
+        "subtitle": {
+          "type": "string",
+          "description": "Short subtitle (0 to 240 chars)"
+        },
+        "description": {
+          "type": "string",
+          "description": "Detailed course overview (0 to 3000 chars)"
+        },
+        "category": {
+          "type": "string",
+          "description": "Category tag (1 to 80 chars)"
+        },
+        "coverUrl": {
+          "type": "string",
+          "description": "Vertical 2:3 poster artwork URL, preset key, or data URL (0 to 900000 chars)"
+        },
+        "bannerUrl": {
+          "type": "string",
+          "description": "Wide hero backdrop URL (0 to 900000 chars)"
+        },
+        "playlistIds": {
+          "type": "array",
+          "description": "Ordered list of up to 50 playlist IDs belonging to this course",
+          "items": { "type": "string" }
+        },
+        "featured": {
+          "type": "boolean",
+          "description": "Whether this course is highlighted in the hero banner"
+        },
+        "isPublished": {
+          "type": "boolean"
+        },
+        "authorId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "title",
+        "subtitle",
+        "description",
+        "category",
+        "coverUrl",
+        "bannerUrl",
+        "playlistIds",
+        "featured",
+        "isPublished",
+        "authorId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "Enrolled student record managed by the administrator for access control.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Student full name (1 to 120 chars)"
+        },
+        "email": {
+          "type": "string",
+          "description": "Normalized lowercase Google email (3 to 180 chars)"
+        },
+        "phone": {
+          "type": "string",
+          "description": "Student phone number (0 to 40 chars)"
+        },
+        "cpf": {
+          "type": "string",
+          "description": "Student CPF document number (0 to 30 chars, read-only for students)"
+        },
+        "birthDate": {
+          "type": "string",
+          "description": "Student birth date (0 to 30 chars, DD/MM/AAAA)"
+        },
+        "turmaId": {
+          "type": "string",
+          "description": "Optional ID of the Turma (class cohort) the student belongs to (0 to 128 chars)"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "blocked"]
+        },
+        "courseIds": {
+          "type": "array",
+          "description": "List of up to 50 unlocked course IDs (empty if accessAll is true)",
+          "items": { "type": "string" }
+        },
+        "accessAll": {
+          "type": "boolean",
+          "description": "Grants full access to all published courses"
+        },
+        "addedBy": {
+          "type": "string",
+          "description": "Admin UID who enrolled the student"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "name",
+        "email",
+        "status",
+        "courseIds",
+        "accessAll",
+        "addedBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Turma": {
+      "title": "Turma",
+      "description": "Class cohort that groups students and defines which courses are unlocked for the cohort.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Turma name (1 to 120 chars)"
+        },
+        "description": {
+          "type": "string",
+          "description": "Optional description or schedule note (0 to 500 chars)"
+        },
+        "courseIds": {
+          "type": "array",
+          "description": "List of up to 50 unlocked course IDs for this turma",
+          "items": { "type": "string" }
+        },
+        "accessAll": {
+          "type": "boolean",
+          "description": "Whether all regular courses are unlocked for this turma"
+        },
+        "isPublished": {
+          "type": "boolean"
+        },
+        "authorId": {
+          "type": "string",
+          "description": "Admin UID who created the turma"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "courseIds",
+        "accessAll",
+        "isPublished",
+        "authorId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "UserProgress": {
+      "title": "UserProgress",
+      "description": "Per-user lesson completion, favorites, and profile contact info.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User customized display name (0 to 120 chars)"
+        },
+        "phone": {
+          "type": "string",
+          "description": "User phone number (0 to 40 chars)"
+        },
+        "cpf": {
+          "type": "string",
+          "description": "User CPF (0 to 30 chars, read-only for students)"
+        },
+        "birthDate": {
+          "type": "string",
+          "description": "User birth date (0 to 30 chars, DD/MM/AAAA)"
+        },
+        "favoriteLessonIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "completedLessonIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "lastWatchedLessonId": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "userId",
+        "favoriteLessonIds",
+        "completedLessonIds",
+        "lastWatchedLessonId",
+        "updatedAt"
+      ]
+    },
+    "PlatformConfig": {
+      "title": "PlatformConfig",
+      "description": "Global branding and hero showcase configuration.",
+      "type": "object",
+      "properties": {
+        "brandName": {
+          "type": "string"
+        },
+        "heroTitle": {
+          "type": "string"
+        },
+        "heroSubtitle": {
+          "type": "string"
+        },
+        "heroCtaText": {
+          "type": "string"
+        },
+        "heroBgUrl": {
+          "type": "string"
+        },
+        "restrictToStudentList": {
+          "type": "boolean"
+        },
+        "updatedBy": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "brandName",
+        "heroTitle",
+        "heroSubtitle",
+        "heroCtaText",
+        "restrictToStudentList",
+        "updatedBy",
+        "updatedAt"
+      ]
+    },
+    "Simulado": {
+      "title": "Simulado",
+      "description": "ENEM practice exam with optional PDF booklet, bubble sheet configuration, timer settings, official answer key, and TRI release control.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Simulado title (1 to 160 chars)"
+        },
+        "area": {
+          "type": "string",
+          "enum": ["MT", "CN", "CH", "LC"],
+          "description": "ENEM knowledge area: Matemática (MT), Ciências da Natureza (CN), Ciências Humanas (CH), Linguagens (LC)"
+        },
+        "questionCount": {
+          "type": "integer",
+          "description": "Number of questions in the exam (1 to 180)"
+        },
+        "timeLimitMinutes": {
+          "type": "integer",
+          "description": "Time limit in minutes (0 = Tempo Livre, or 1 to 600 minutes)"
+        },
+        "pdfUrl": {
+          "type": "string",
+          "description": "Optional PDF URL or base64 data URL (0 to 900000 chars)"
+        },
+        "pdfTitle": {
+          "type": "string",
+          "description": "Optional PDF file name (0 to 160 chars)"
+        },
+        "answerKey": {
+          "type": "string",
+          "description": "Compact string of official answers A-E of length questionCount (1 to 180 chars)"
+        },
+        "resultsReleased": {
+          "type": "boolean",
+          "description": "Whether the admin has finalized and released TRI scores to students"
+        },
+        "isPublished": {
+          "type": "boolean"
+        },
+        "authorId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "title",
+        "area",
+        "questionCount",
+        "timeLimitMinutes",
+        "pdfUrl",
+        "pdfTitle",
+        "answerKey",
+        "resultsReleased",
+        "isPublished",
+        "authorId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SimuladoSubmission": {
+      "title": "SimuladoSubmission",
+      "description": "Student bubble sheet markings, auto-saved progress, start/finish timestamps, and elapsed duration.",
+      "type": "object",
+      "properties": {
+        "simuladoId": {
+          "type": "string"
+        },
+        "userId": {
+          "type": "string"
+        },
+        "userName": {
+          "type": "string"
+        },
+        "userEmail": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["in_progress", "completed"]
+        },
+        "answersString": {
+          "type": "string",
+          "description": "Compact string of marked bubbles (A, B, C, D, E, or - for blank), length 1 to 180"
+        },
+        "startedAtMs": {
+          "type": "integer",
+          "description": "Epoch milliseconds when the student clicked Iniciar"
+        },
+        "finishedAtMs": {
+          "type": "integer",
+          "description": "Epoch milliseconds when finalized (0 if in_progress)"
+        },
+        "durationSeconds": {
+          "type": "integer",
+          "description": "Elapsed seconds spent on the test"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "simuladoId",
+        "userId",
+        "userName",
+        "userEmail",
+        "status",
+        "answersString",
+        "startedAtMs",
+        "finishedAtMs",
+        "durationSeconds",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PdfChunk": {
+      "title": "PdfChunk",
+      "description": "Chunked base64 storage for large PDF files so multi-megabyte exam and lesson PDFs exceed single-document limits.",
+      "type": "object",
+      "properties": {
+        "pdfId": {
+          "type": "string",
+          "description": "Unique PDF identifier (1 to 128 chars)"
+        },
+        "chunkIndex": {
+          "type": "integer",
+          "description": "Zero-based index of this chunk (0 to 200)"
+        },
+        "totalChunks": {
+          "type": "integer",
+          "description": "Total number of chunks for this PDF (1 to 200)"
+        },
+        "data": {
+          "type": "string",
+          "description": "Base64 slice payload (1 to 750000 chars)"
+        },
+        "authorId": {
+          "type": "string",
+          "description": "Admin UID who uploaded the PDF"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "pdfId",
+        "chunkIndex",
+        "totalChunks",
+        "data",
+        "authorId",
+        "createdAt"
+      ]
+    },
+    "Doubt": {
+      "title": "Doubt",
+      "description": "Student doubt post with optional photo of the question, likes at the top, and resolved status controlled by the creator.",
+      "type": "object",
+      "properties": {
+        "authorId": {
+          "type": "string",
+          "description": "UID of the student who posted the doubt"
+        },
+        "authorName": {
+          "type": "string",
+          "description": "Display name of the student (1 to 120 chars)"
+        },
+        "authorPhotoUrl": {
+          "type": "string",
+          "description": "Profile avatar URL of the student (0 to 2000 chars)"
+        },
+        "text": {
+          "type": "string",
+          "description": "Question description text (0 to 2000 chars)"
+        },
+        "imageUrl": {
+          "type": "string",
+          "description": "Optional compressed base64 photo or image URL of the doubt (0 to 850000 chars)"
+        },
+        "likedBy": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of user UIDs who liked this doubt (up to 500)"
+        },
+        "isResolved": {
+          "type": "boolean",
+          "description": "True when marked by the creator as Dúvida Sanada"
+        },
+        "createdAtMs": {
+          "type": "integer",
+          "description": "Epoch milliseconds for chronological sorting"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "authorId",
+        "authorName",
+        "authorPhotoUrl",
+        "text",
+        "imageUrl",
+        "likedBy",
+        "isResolved",
+        "createdAtMs",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "DoubtReply": {
+      "title": "DoubtReply",
+      "description": "Student or teacher reply to a doubt post, supporting both text explanation and photo of the solution.",
+      "type": "object",
+      "properties": {
+        "doubtId": {
+          "type": "string",
+          "description": "ID of the parent Doubt post"
+        },
+        "authorId": {
+          "type": "string",
+          "description": "UID of the user who replied"
+        },
+        "authorName": {
+          "type": "string",
+          "description": "Display name of the user who replied (1 to 120 chars)"
+        },
+        "authorPhotoUrl": {
+          "type": "string",
+          "description": "Avatar URL of the user who replied (0 to 2000 chars)"
+        },
+        "text": {
+          "type": "string",
+          "description": "Reply text explanation (0 to 2000 chars)"
+        },
+        "imageUrl": {
+          "type": "string",
+          "description": "Optional compressed base64 photo or image URL of the resolution (0 to 850000 chars)"
+        },
+        "createdAtMs": {
+          "type": "integer",
+          "description": "Epoch milliseconds for chronological sorting"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "doubtId",
+        "authorId",
+        "authorName",
+        "authorPhotoUrl",
+        "text",
+        "imageUrl",
+        "createdAtMs",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CalendarEvent": {
+      "title": "CalendarEvent",
+      "description": "Course calendar event or weekly topic with single or multi-day highlighter period, circular icon, and custom color.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "startDate": { "type": "string" },
+        "endDate": { "type": "string" },
+        "color": { "type": "string" },
+        "icon": { "type": "string" },
+        "isPublished": { "type": "boolean" },
+        "authorId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "title",
+        "description",
+        "category",
+        "startDate",
+        "endDate",
+        "color",
+        "icon",
+        "isPublished",
+        "authorId",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/admins/{adminUid}": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "email": { "type": "string" }
+        }
+      },
+      "description": "Admin role lookup collection."
+    },
+    "/lessons/{lessonId}": {
+      "schema": { "$ref": "#/entities/Lesson" },
+      "description": "All video lessons and their attached PDFs."
+    },
+    "/lessonFolders/{folderId}": {
+      "schema": { "$ref": "#/entities/LessonFolder" },
+      "description": "Folders organizing lessons."
+    },
+    "/playlists/{playlistId}": {
+      "schema": { "$ref": "#/entities/Playlist" },
+      "description": "All playlists grouping lessons."
+    },
+    "/courses/{courseId}": {
+      "schema": { "$ref": "#/entities/Course" },
+      "description": "All courses grouping playlists."
+    },
+    "/students/{studentId}": {
+      "schema": { "$ref": "#/entities/Student" },
+      "description": "Enrolled students keyed by normalized email slug or ID."
+    },
+    "/turmas/{turmaId}": {
+      "schema": { "$ref": "#/entities/Turma" },
+      "description": "Class cohorts grouping students and liberating courses."
+    },
+    "/userProgress/{userId}": {
+      "schema": { "$ref": "#/entities/UserProgress" },
+      "description": "Per-student progress and favorites."
+    },
+    "/platformConfig/{configId}": {
+      "schema": { "$ref": "#/entities/PlatformConfig" },
+      "description": "Global platform configuration document (main)."
+    },
+    "/simulados/{simuladoId}": {
+      "schema": { "$ref": "#/entities/Simulado" },
+      "description": "ENEM Simulados with official answer keys and TRI settings."
+    },
+    "/simuladoSubmissions/{submissionId}": {
+      "schema": { "$ref": "#/entities/SimuladoSubmission" },
+      "description": "Student bubble sheet submissions and exam timers."
+    },
+    "/pdfChunks/{chunkId}": {
+      "schema": { "$ref": "#/entities/PdfChunk" },
+      "description": "Chunked storage for multi-megabyte PDF documents."
+    },
+    "/doubts/{doubtId}": {
+      "schema": { "$ref": "#/entities/Doubt" },
+      "description": "Social Q&A doubts posted by students with photos, likes, and resolved status."
+    },
+    "/doubtReplies/{replyId}": {
+      "schema": { "$ref": "#/entities/DoubtReply" },
+      "description": "Student and teacher replies to doubts with photos and explanations."
+    },
+    "/calendarEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/CalendarEvent" },
+      "description": "Course calendar events and weekly topics."
+    }
+  }
+}

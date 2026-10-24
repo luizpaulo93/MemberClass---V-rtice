@@ -1,0 +1,591 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Hardened Global Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'luizpaulofisica@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidStringArray(arr, maxItems) {
+      return arr is list && arr.size() <= maxItems && (arr.size() == 0 || (arr[0] is string && arr[0].size() <= 128));
+    }
+
+    function isValidPdfList(arr) {
+      return arr is list && arr.size() <= 20 && (
+        arr.size() == 0 || (
+          arr[0] is map &&
+          arr[0].keys().hasAll(['id', 'title', 'url', 'sizeLabel']) &&
+          arr[0].keys().hasOnly(['id', 'title', 'url', 'sizeLabel']) &&
+          arr[0].id is string && arr[0].id.size() >= 1 && arr[0].id.size() <= 128 &&
+          arr[0].title is string && arr[0].title.size() >= 1 && arr[0].title.size() <= 160 &&
+          arr[0].url is string && arr[0].url.size() >= 1 && arr[0].url.size() <= 900000 &&
+          arr[0].sizeLabel is string && arr[0].sizeLabel.size() >= 1 && arr[0].sizeLabel.size() <= 40
+        )
+      );
+    }
+
+    // 3. Entity Validation Blueprints
+    function isValidLesson(data) {
+      return data.keys().hasAll([
+        'title', 'description', 'youtubeId', 'duration', 'thumbnailUrl',
+        'pdfs', 'isFree', 'isPublished', 'authorId', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'title', 'description', 'youtubeId', 'duration', 'thumbnailUrl',
+        'pdfs', 'folderId', 'isFree', 'isPublished', 'authorId', 'createdAt', 'updatedAt'
+      ]) &&
+      data.title is string && data.title.size() >= 1 && data.title.size() <= 160 &&
+      data.description is string && data.description.size() >= 0 && data.description.size() <= 4000 &&
+      data.youtubeId is string && (data.youtubeId.size() == 0 || (data.youtubeId.size() >= 5 && data.youtubeId.size() <= 64 && data.youtubeId.matches('^[a-zA-Z0-9_\\-]+$'))) &&
+      data.duration is string && data.duration.size() >= 1 && data.duration.size() <= 20 &&
+      data.thumbnailUrl is string && data.thumbnailUrl.size() >= 0 && data.thumbnailUrl.size() <= 900000 &&
+      isValidPdfList(data.pdfs) &&
+      (!('folderId' in data) || (data.folderId is string && data.folderId.size() >= 0 && data.folderId.size() <= 128)) &&
+      data.isFree is bool &&
+      data.isPublished is bool &&
+      data.authorId is string && isValidId(data.authorId) && data.authorId == request.auth.uid &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidLessonFolder(data) {
+      return data.keys().hasAll([
+        'name', 'isPublished', 'authorId', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'name', 'isPublished', 'authorId', 'createdAt', 'updatedAt'
+      ]) &&
+      data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+      data.isPublished is bool &&
+      data.authorId is string && isValidId(data.authorId) && data.authorId == request.auth.uid &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidPlaylist(data) {
+      return data.keys().hasAll([
+        'title', 'description', 'coverUrl', 'lessonIds',
+        'isPublished', 'authorId', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'title', 'description', 'coverUrl', 'lessonIds',
+        'isPublished', 'authorId', 'createdAt', 'updatedAt'
+      ]) &&
+      data.title is string && data.title.size() >= 1 && data.title.size() <= 160 &&
+      data.description is string && data.description.size() >= 0 && data.description.size() <= 1500 &&
+      data.coverUrl is string && data.coverUrl.size() >= 0 && data.coverUrl.size() <= 900000 &&
+      isValidStringArray(data.lessonIds, 100) &&
+      data.isPublished is bool &&
+      data.authorId is string && isValidId(data.authorId) && data.authorId == request.auth.uid &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidCourse(data) {
+      return data.keys().hasAll([
+        'title', 'subtitle', 'description', 'category', 'coverUrl',
+        'bannerUrl', 'playlistIds', 'featured', 'isPublished',
+        'authorId', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'title', 'subtitle', 'description', 'category', 'coverUrl',
+        'bannerUrl', 'playlistIds', 'featured', 'isPublished',
+        'authorId', 'createdAt', 'updatedAt'
+      ]) &&
+      data.title is string && data.title.size() >= 1 && data.title.size() <= 160 &&
+      data.subtitle is string && data.subtitle.size() >= 0 && data.subtitle.size() <= 240 &&
+      data.description is string && data.description.size() >= 0 && data.description.size() <= 3000 &&
+      data.category is string && data.category.size() >= 1 && data.category.size() <= 80 &&
+      data.coverUrl is string && data.coverUrl.size() >= 0 && data.coverUrl.size() <= 900000 &&
+      data.bannerUrl is string && data.bannerUrl.size() >= 0 && data.bannerUrl.size() <= 900000 &&
+      isValidStringArray(data.playlistIds, 50) &&
+      data.featured is bool &&
+      data.isPublished is bool &&
+      data.authorId is string && isValidId(data.authorId) && data.authorId == request.auth.uid &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidStudent(data) {
+      return data.keys().hasAll([
+        'name', 'email', 'status', 'courseIds',
+        'accessAll', 'addedBy', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'name', 'email', 'phone', 'cpf', 'birthDate', 'turmaId', 'status', 'courseIds',
+        'accessAll', 'addedBy', 'createdAt', 'updatedAt'
+      ]) &&
+      data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+      data.email is string && data.email.size() >= 3 && data.email.size() <= 180 &&
+      (!('phone' in data) || (data.phone is string && data.phone.size() >= 0 && data.phone.size() <= 40)) &&
+      (!('cpf' in data) || (data.cpf is string && data.cpf.size() >= 0 && data.cpf.size() <= 30)) &&
+      (!('birthDate' in data) || (data.birthDate is string && data.birthDate.size() >= 0 && data.birthDate.size() <= 30)) &&
+      (!('turmaId' in data) || (data.turmaId is string && data.turmaId.size() >= 0 && data.turmaId.size() <= 128)) &&
+      data.status is string && (data.status == 'active' || data.status == 'blocked') &&
+      isValidStringArray(data.courseIds, 50) &&
+      data.accessAll is bool &&
+      data.addedBy is string && isValidId(data.addedBy) &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidTurma(data) {
+      return data.keys().hasAll([
+        'name', 'description', 'courseIds', 'accessAll',
+        'isPublished', 'authorId', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'name', 'description', 'courseIds', 'accessAll',
+        'isPublished', 'authorId', 'createdAt', 'updatedAt'
+      ]) &&
+      data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+      data.description is string && data.description.size() >= 0 && data.description.size() <= 500 &&
+      isValidStringArray(data.courseIds, 50) &&
+      data.accessAll is bool &&
+      data.isPublished is bool &&
+      data.authorId is string && isValidId(data.authorId) && data.authorId == request.auth.uid &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidUserProgress(data) {
+      return data.keys().hasAll([
+        'userId', 'favoriteLessonIds', 'completedLessonIds',
+        'lastWatchedLessonId', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'userId', 'displayName', 'phone', 'cpf', 'birthDate',
+        'favoriteLessonIds', 'completedLessonIds',
+        'lastWatchedLessonId', 'updatedAt'
+      ]) &&
+      data.userId is string && isValidId(data.userId) && data.userId == request.auth.uid &&
+      (!('displayName' in data) || (data.displayName is string && data.displayName.size() >= 0 && data.displayName.size() <= 120)) &&
+      (!('phone' in data) || (data.phone is string && data.phone.size() >= 0 && data.phone.size() <= 40)) &&
+      (!('cpf' in data) || (data.cpf is string && data.cpf.size() >= 0 && data.cpf.size() <= 30)) &&
+      (!('birthDate' in data) || (data.birthDate is string && data.birthDate.size() >= 0 && data.birthDate.size() <= 30)) &&
+      isValidStringArray(data.favoriteLessonIds, 100) &&
+      isValidStringArray(data.completedLessonIds, 200) &&
+      data.lastWatchedLessonId is string && data.lastWatchedLessonId.size() >= 0 && data.lastWatchedLessonId.size() <= 128 &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidPlatformConfig(data) {
+      return data.keys().hasAll([
+        'brandName', 'heroTitle', 'heroSubtitle', 'heroCtaText',
+        'restrictToStudentList', 'updatedBy', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'brandName', 'heroTitle', 'heroSubtitle', 'heroCtaText',
+        'heroBgUrl', 'restrictToStudentList', 'updatedBy', 'updatedAt'
+      ]) &&
+      data.brandName is string && data.brandName.size() >= 1 && data.brandName.size() <= 60 &&
+      data.heroTitle is string && data.heroTitle.size() >= 1 && data.heroTitle.size() <= 140 &&
+      data.heroSubtitle is string && data.heroSubtitle.size() >= 1 && data.heroSubtitle.size() <= 240 &&
+      data.heroCtaText is string && data.heroCtaText.size() >= 1 && data.heroCtaText.size() <= 60 &&
+      (!('heroBgUrl' in data) || (data.heroBgUrl is string && data.heroBgUrl.size() >= 0 && data.heroBgUrl.size() <= 900000)) &&
+      data.restrictToStudentList is bool &&
+      data.updatedBy is string && isValidId(data.updatedBy) && data.updatedBy == request.auth.uid &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidSimulado(data) {
+      return data.keys().hasAll([
+        'title', 'area', 'questionCount', 'timeLimitMinutes',
+        'pdfUrl', 'pdfTitle', 'answerKey', 'resultsReleased',
+        'isPublished', 'authorId', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'title', 'area', 'questionCount', 'timeLimitMinutes',
+        'pdfUrl', 'pdfTitle', 'answerKey', 'resultsReleased',
+        'isPublished', 'authorId', 'createdAt', 'updatedAt'
+      ]) &&
+      data.title is string && data.title.size() >= 1 && data.title.size() <= 160 &&
+      data.area is string && (data.area == 'MT' || data.area == 'CN' || data.area == 'CH' || data.area == 'LC') &&
+      data.questionCount is int && data.questionCount >= 1 && data.questionCount <= 180 &&
+      data.timeLimitMinutes is int && data.timeLimitMinutes >= 0 && data.timeLimitMinutes <= 600 &&
+      data.pdfUrl is string && data.pdfUrl.size() >= 0 && data.pdfUrl.size() <= 900000 &&
+      data.pdfTitle is string && data.pdfTitle.size() >= 0 && data.pdfTitle.size() <= 160 &&
+      data.answerKey is string && data.answerKey.size() >= 1 && data.answerKey.size() <= 180 && data.answerKey.matches('^[ABCDE]+$') &&
+      data.resultsReleased is bool &&
+      data.isPublished is bool &&
+      data.authorId is string && isValidId(data.authorId) && data.authorId == request.auth.uid &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidSimuladoSubmission(data) {
+      return data.keys().hasAll([
+        'simuladoId', 'userId', 'userName', 'userEmail',
+        'status', 'answersString', 'startedAtMs', 'finishedAtMs',
+        'durationSeconds', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'simuladoId', 'userId', 'userName', 'userEmail',
+        'status', 'answersString', 'startedAtMs', 'finishedAtMs',
+        'durationSeconds', 'createdAt', 'updatedAt'
+      ]) &&
+      data.simuladoId is string && isValidId(data.simuladoId) &&
+      data.userId is string && isValidId(data.userId) && data.userId == request.auth.uid &&
+      data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 120 &&
+      data.userEmail is string && data.userEmail.size() >= 3 && data.userEmail.size() <= 180 &&
+      data.status is string && (data.status == 'in_progress' || data.status == 'completed') &&
+      data.answersString is string && data.answersString.size() >= 1 && data.answersString.size() <= 180 && data.answersString.matches('^[ABCDE\\-]+$') &&
+      data.startedAtMs is int && data.startedAtMs >= 0 &&
+      data.finishedAtMs is int && data.finishedAtMs >= 0 &&
+      data.durationSeconds is int && data.durationSeconds >= 0 && data.durationSeconds <= 86400 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidPdfChunk(data) {
+      return data.keys().hasAll([
+        'pdfId', 'chunkIndex', 'totalChunks', 'data', 'authorId', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'pdfId', 'chunkIndex', 'totalChunks', 'data', 'authorId', 'createdAt'
+      ]) &&
+      data.pdfId is string && isValidId(data.pdfId) &&
+      data.chunkIndex is int && data.chunkIndex >= 0 && data.chunkIndex <= 200 &&
+      data.totalChunks is int && data.totalChunks >= 1 && data.totalChunks <= 200 &&
+      data.data is string && data.data.size() >= 1 && data.data.size() <= 750000 &&
+      data.authorId is string && isValidId(data.authorId) && data.authorId == request.auth.uid &&
+      data.createdAt is timestamp;
+    }
+
+    function isValidDoubt(data) {
+      return data.keys().hasAll([
+        'authorId', 'authorName', 'authorPhotoUrl', 'text', 'imageUrl',
+        'likedBy', 'isResolved', 'createdAtMs', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'authorId', 'authorName', 'authorPhotoUrl', 'text', 'imageUrl',
+        'likedBy', 'isResolved', 'createdAtMs', 'createdAt', 'updatedAt'
+      ]) &&
+      data.authorId is string && isValidId(data.authorId) &&
+      data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 120 &&
+      data.authorPhotoUrl is string && data.authorPhotoUrl.size() <= 2000 &&
+      data.text is string && data.text.size() <= 2000 &&
+      data.imageUrl is string && data.imageUrl.size() <= 850000 &&
+      (data.text.size() >= 1 || data.imageUrl.size() >= 1) &&
+      data.likedBy is list && data.likedBy.size() <= 500 &&
+      data.isResolved is bool &&
+      data.createdAtMs is int && data.createdAtMs >= 0 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidDoubtReply(data) {
+      return data.keys().hasAll([
+        'doubtId', 'authorId', 'authorName', 'authorPhotoUrl', 'text',
+        'imageUrl', 'createdAtMs', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'doubtId', 'authorId', 'authorName', 'authorPhotoUrl', 'text',
+        'imageUrl', 'createdAtMs', 'createdAt', 'updatedAt'
+      ]) &&
+      data.doubtId is string && isValidId(data.doubtId) &&
+      data.authorId is string && isValidId(data.authorId) &&
+      data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 120 &&
+      data.authorPhotoUrl is string && data.authorPhotoUrl.size() <= 2000 &&
+      data.text is string && data.text.size() <= 2000 &&
+      data.imageUrl is string && data.imageUrl.size() <= 850000 &&
+      (data.text.size() >= 1 || data.imageUrl.size() >= 1) &&
+      data.createdAtMs is int && data.createdAtMs >= 0 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidCalendarEvent(data) {
+      return data.keys().hasAll([
+        'title', 'description', 'category', 'startDate', 'endDate',
+        'color', 'icon', 'isPublished', 'authorId', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'title', 'description', 'category', 'startDate', 'endDate',
+        'color', 'icon', 'isPublished', 'authorId', 'createdAt', 'updatedAt'
+      ]) &&
+      data.title is string && data.title.size() >= 1 && data.title.size() <= 160 &&
+      data.description is string && data.description.size() >= 0 && data.description.size() <= 2000 &&
+      data.category is string && data.category.size() >= 1 && data.category.size() <= 40 &&
+      data.startDate is string && data.startDate.size() == 10 &&
+      data.endDate is string && data.endDate.size() == 10 &&
+      data.color is string && data.color.size() >= 1 && data.color.size() <= 30 &&
+      data.icon is string && data.icon.size() >= 1 && data.icon.size() <= 30 &&
+      data.isPublished is bool &&
+      data.authorId is string && isValidId(data.authorId) &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    // 4. Collection Match Blocks
+    match /admins/{adminUid} {
+      allow get: if isVerifiedUser() && isValidId(adminUid) && request.auth.uid == adminUid;
+      allow list, create, update, delete: if false;
+    }
+
+    match /lessons/{lessonId} {
+      allow get: if isVerifiedUser() && isValidId(lessonId) && (existing().isPublished == true || isAdmin());
+      allow list: if isVerifiedUser() && (existing().isPublished == true || existing().authorId == request.auth.uid);
+      allow create: if isVerifiedUser() && isValidId(lessonId) && isValidLesson(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
+      allow update: if isVerifiedUser() && isValidId(lessonId) && isValidLesson(incoming()) && incoming().updatedAt == request.time && (
+        isAdmin() || (
+          incoming().createdAt == existing().createdAt &&
+          incoming().authorId == existing().authorId &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'description', 'youtubeId', 'duration',
+            'thumbnailUrl', 'pdfs', 'folderId', 'isFree', 'isPublished', 'updatedAt'
+          ])
+        )
+      );
+      allow delete: if isVerifiedUser() && isValidId(lessonId) && isAdmin();
+    }
+
+    match /lessonFolders/{folderId} {
+      allow get: if isVerifiedUser() && isValidId(folderId) && (existing().isPublished == true || isAdmin());
+      allow list: if isVerifiedUser() && (existing().isPublished == true || existing().authorId == request.auth.uid);
+      allow create: if isVerifiedUser() && isValidId(folderId) && isValidLessonFolder(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
+      allow update: if isVerifiedUser() && isValidId(folderId) && isValidLessonFolder(incoming()) && incoming().updatedAt == request.time && (
+        isAdmin() || (
+          incoming().createdAt == existing().createdAt &&
+          incoming().authorId == existing().authorId &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'isPublished', 'updatedAt'
+          ])
+        )
+      );
+      allow delete: if isVerifiedUser() && isValidId(folderId) && isAdmin();
+    }
+
+    match /playlists/{playlistId} {
+      allow get: if isVerifiedUser() && isValidId(playlistId) && (existing().isPublished == true || isAdmin());
+      allow list: if isVerifiedUser() && (existing().isPublished == true || existing().authorId == request.auth.uid);
+      allow create: if isVerifiedUser() && isValidId(playlistId) && isValidPlaylist(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
+      allow update: if isVerifiedUser() && isValidId(playlistId) && isValidPlaylist(incoming()) && incoming().updatedAt == request.time && (
+        isAdmin() || (
+          incoming().createdAt == existing().createdAt &&
+          incoming().authorId == existing().authorId &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'description', 'coverUrl', 'lessonIds', 'isPublished', 'updatedAt'
+          ])
+        )
+      );
+      allow delete: if isVerifiedUser() && isValidId(playlistId) && isAdmin();
+    }
+
+    match /courses/{courseId} {
+      allow get: if isVerifiedUser() && isValidId(courseId) && (existing().isPublished == true || isAdmin());
+      allow list: if isVerifiedUser() && (existing().isPublished == true || existing().authorId == request.auth.uid);
+      allow create: if isVerifiedUser() && isValidId(courseId) && isValidCourse(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
+      allow update: if isVerifiedUser() && isValidId(courseId) && isValidCourse(incoming()) && incoming().updatedAt == request.time && (
+        isAdmin() || (
+          incoming().createdAt == existing().createdAt &&
+          incoming().authorId == existing().authorId &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'subtitle', 'description', 'category', 'coverUrl',
+            'bannerUrl', 'playlistIds', 'featured', 'isPublished', 'updatedAt'
+          ])
+        )
+      );
+      allow delete: if isVerifiedUser() && isValidId(courseId) && isAdmin();
+    }
+
+    match /students/{studentId} {
+      allow get: if isVerifiedUser() && isValidId(studentId) && (resource == null || existing().email == request.auth.token.email || isAdmin());
+      allow list: if isVerifiedUser() && (isAdmin() || existing().email == request.auth.token.email || existing().addedBy == request.auth.uid);
+      allow create: if isVerifiedUser() && isValidId(studentId) && isValidStudent(incoming()) && incoming().addedBy == request.auth.uid && incoming().createdAt == request.time && incoming().updatedAt == request.time && (
+        isAdmin() || (
+          incoming().email == request.auth.token.email &&
+          incoming().status == 'blocked' &&
+          incoming().accessAll == false &&
+          incoming().courseIds.size() == 0 &&
+          (!('turmaId' in incoming()) || incoming().turmaId == '')
+        )
+      );
+      allow update: if isVerifiedUser() && isValidId(studentId) && isValidStudent(incoming()) && incoming().updatedAt == request.time && (
+        isAdmin() || (
+          existing().email == request.auth.token.email &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().addedBy == existing().addedBy &&
+          incoming().email == existing().email &&
+          incoming().status == existing().status &&
+          incoming().accessAll == existing().accessAll &&
+          incoming().courseIds == existing().courseIds &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'phone', 'birthDate', 'updatedAt'
+          ])
+        )
+      );
+      allow delete: if isVerifiedUser() && isValidId(studentId) && isAdmin();
+    }
+
+    match /turmas/{turmaId} {
+      allow get: if isVerifiedUser() && isValidId(turmaId) && (existing().isPublished == true || isAdmin());
+      allow list: if isVerifiedUser() && (existing().isPublished == true || existing().authorId == request.auth.uid);
+      allow create: if isVerifiedUser() && isValidId(turmaId) && isValidTurma(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
+      allow update: if isVerifiedUser() && isValidId(turmaId) && isValidTurma(incoming()) && incoming().updatedAt == request.time && (
+        isAdmin() || (
+          incoming().createdAt == existing().createdAt &&
+          incoming().authorId == existing().authorId &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'description', 'courseIds', 'accessAll', 'isPublished', 'updatedAt'
+          ])
+        )
+      );
+      allow delete: if isVerifiedUser() && isValidId(turmaId) && isAdmin();
+    }
+
+    match /userProgress/{userId} {
+      allow get: if isVerifiedUser() && isValidId(userId) && request.auth.uid == userId;
+      allow list: if false;
+      allow create: if isVerifiedUser() && isValidId(userId) && request.auth.uid == userId && isValidUserProgress(incoming()) && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser() && isValidId(userId) && request.auth.uid == userId && isValidUserProgress(incoming()) && incoming().userId == existing().userId && incoming().updatedAt == request.time && (
+        isAdmin() ||
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName', 'phone', 'birthDate', 'favoriteLessonIds', 'completedLessonIds', 'lastWatchedLessonId', 'updatedAt'
+        ])
+      );
+      allow delete: if false;
+    }
+
+    match /platformConfig/{configId} {
+      allow get: if isVerifiedUser() && isValidId(configId);
+      allow list: if false;
+      allow create: if isVerifiedUser() && isValidId(configId) && isValidPlatformConfig(incoming()) && incoming().updatedAt == request.time && isAdmin();
+      allow update: if isVerifiedUser() && isValidId(configId) && isValidPlatformConfig(incoming()) && incoming().updatedAt == request.time && (
+        isAdmin() ||
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'brandName', 'heroTitle', 'heroSubtitle', 'heroCtaText',
+          'heroBgUrl', 'restrictToStudentList', 'updatedBy', 'updatedAt'
+        ])
+      );
+      allow delete: if false;
+    }
+
+    match /simulados/{simuladoId} {
+      allow get: if isVerifiedUser() && isValidId(simuladoId) && (existing().isPublished == true || isAdmin());
+      allow list: if isVerifiedUser() && (existing().isPublished == true || existing().authorId == request.auth.uid);
+      allow create: if isVerifiedUser() && isValidId(simuladoId) && isValidSimulado(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
+      allow update: if isVerifiedUser() && isValidId(simuladoId) && isValidSimulado(incoming()) && incoming().updatedAt == request.time && (
+        isAdmin() || (
+          incoming().createdAt == existing().createdAt &&
+          incoming().authorId == existing().authorId &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'area', 'questionCount', 'timeLimitMinutes',
+            'pdfUrl', 'pdfTitle', 'answerKey', 'resultsReleased',
+            'isPublished', 'updatedAt'
+          ])
+        )
+      );
+      allow delete: if isVerifiedUser() && isValidId(simuladoId) && isAdmin();
+    }
+
+    match /simuladoSubmissions/{submissionId} {
+      allow get: if isVerifiedUser() && isValidId(submissionId);
+      allow list: if isVerifiedUser();
+      allow create: if isVerifiedUser() && isValidId(submissionId) && isValidSimuladoSubmission(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser() && isValidId(submissionId) && isValidSimuladoSubmission(incoming()) && incoming().updatedAt == request.time && (
+        isAdmin() || (
+          incoming().userId == existing().userId &&
+          incoming().simuladoId == existing().simuladoId &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'userName', 'userEmail', 'status', 'answersString',
+            'startedAtMs', 'finishedAtMs', 'durationSeconds', 'createdAt', 'updatedAt'
+          ])
+        )
+      );
+      allow delete: if isVerifiedUser() && isValidId(submissionId) && (existing().userId == request.auth.uid || isAdmin());
+    }
+
+    match /pdfChunks/{chunkId} {
+      allow get: if isVerifiedUser() && isValidId(chunkId);
+      allow list: if isVerifiedUser();
+      allow create: if isVerifiedUser() && isValidId(chunkId) && isValidPdfChunk(incoming()) && incoming().createdAt == request.time && isAdmin();
+      allow update: if isVerifiedUser() && isValidId(chunkId) && isValidPdfChunk(incoming()) && (
+        isAdmin() || (
+          incoming().createdAt == existing().createdAt &&
+          incoming().authorId == existing().authorId &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['data'])
+        )
+      );
+      allow delete: if isVerifiedUser() && isValidId(chunkId) && isAdmin();
+    }
+
+    match /doubts/{doubtId} {
+      allow get: if isVerifiedUser() && isValidId(doubtId);
+      allow list: if isVerifiedUser();
+      allow create: if isVerifiedUser() && isValidId(doubtId) && isValidDoubt(incoming()) && incoming().authorId == request.auth.uid && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser() && isValidId(doubtId) && isValidDoubt(incoming()) && incoming().updatedAt == request.time && (
+        isAdmin() || (
+          existing().authorId == request.auth.uid &&
+          incoming().authorId == existing().authorId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().createdAtMs == existing().createdAtMs &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'authorName', 'authorPhotoUrl', 'text', 'imageUrl', 'likedBy', 'isResolved', 'updatedAt'
+          ])
+        ) || (
+          incoming().authorId == existing().authorId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().createdAtMs == existing().createdAtMs &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['likedBy', 'updatedAt'])
+        )
+      );
+      allow delete: if isVerifiedUser() && isValidId(doubtId) && (existing().authorId == request.auth.uid || isAdmin());
+    }
+
+    match /doubtReplies/{replyId} {
+      allow get: if isVerifiedUser() && isValidId(replyId);
+      allow list: if isVerifiedUser();
+      allow create: if isVerifiedUser() && isValidId(replyId) && isValidDoubtReply(incoming()) && incoming().authorId == request.auth.uid && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser() && isValidId(replyId) && isValidDoubtReply(incoming()) && incoming().updatedAt == request.time && (
+        isAdmin() || (
+          existing().authorId == request.auth.uid &&
+          incoming().authorId == existing().authorId &&
+          incoming().doubtId == existing().doubtId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().createdAtMs == existing().createdAtMs &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'authorName', 'authorPhotoUrl', 'text', 'imageUrl', 'updatedAt'
+          ])
+        )
+      );
+      allow delete: if isVerifiedUser() && isValidId(replyId) && (existing().authorId == request.auth.uid || isAdmin());
+    }
+
+    match /calendarEvents/{eventId} {
+      allow get: if isVerifiedUser() && isValidId(eventId);
+      allow list: if isVerifiedUser();
+      allow create: if isVerifiedUser() && isValidId(eventId) && isValidCalendarEvent(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
+      allow update: if isVerifiedUser() && isValidId(eventId) && isValidCalendarEvent(incoming()) && incoming().updatedAt == request.time && isAdmin();
+      allow delete: if isVerifiedUser() && isValidId(eventId) && isAdmin();
+    }
+  }
+}

@@ -1,0 +1,346 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+@layer base {
+  :root {
+    --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    color-scheme: dark;
+  }
+
+  html.theme-light {
+    color-scheme: light;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: #070b14;
+    color: #f8fafc;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+
+  html.theme-light body {
+    background-color: #f0f5fc;
+    color: #0b1329;
+  }
+
+  select option {
+    background-color: #0d1527;
+    color: #f8fafc;
+  }
+
+  html.theme-light select option {
+    background-color: #ffffff;
+    color: #0b1329;
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Hide horizontal scrollbars on carousels while keeping touch/scroll */
+.overflow-x-auto {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.overflow-x-auto::-webkit-scrollbar {
+  display: none;
+}
+
+/* Custom subtle vertical scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #070b14;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2563eb;
+}
+
+html.theme-light ::-webkit-scrollbar-track {
+  background: #f0f5fc;
+}
+
+html.theme-light ::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+}
+
+html.theme-light ::-webkit-scrollbar-thumb:hover {
+  background: #2563eb;
+}
+
+/* ==========================================================================
+   PROFESSIONAL LIGHT THEME ARCHITECTURE (html.theme-light)
+   Universal high-contrast adaptation for all cards, modals, inputs & states
+   ========================================================================== */
+
+/* 1. Root Page Canvas */
+html.theme-light .min-h-screen[class*="bg-[#0"] {
+  background-color: #f0f5fc !important;
+  color: #0b1329 !important;
+}
+
+/* 2. Universal Cards, Modals, Empty States & Panels */
+html.theme-light [class*="bg-[#0d"]:not(.stealth-player-dark):not(.stealth-player-dark *):not(.cover-poster-dark):not(.cover-poster-dark *),
+html.theme-light [class*="bg-[#0f"]:not(.stealth-player-dark):not(.stealth-player-dark *):not(.cover-poster-dark):not(.cover-poster-dark *),
+html.theme-light [class*="bg-[#1"]:not(.stealth-player-dark):not(.stealth-player-dark *):not(.cover-poster-dark):not(.cover-poster-dark *) {
+  background-color: #ffffff !important;
+  border-color: rgba(37, 99, 235, 0.14) !important;
+  box-shadow: 0 8px 24px -6px rgba(15, 23, 42, 0.06), 0 2px 6px -1px rgba(15, 23, 42, 0.04) !important;
+}
+
+/* Highlighted Module Card */
+html.theme-light .bg-\[\#18132a\]:not(.stealth-player-dark):not(.cover-poster-dark),
+html.theme-light .bg-\[\#0f1b33\]:not(.stealth-player-dark):not(.cover-poster-dark) {
+  background-color: #f0f6ff !important;
+  border-color: rgba(37, 99, 235, 0.32) !important;
+}
+
+html.theme-light .bg-\[\#171424\]\/70:not(.stealth-player-dark):not(.cover-poster-dark),
+html.theme-light .bg-\[\#0d1527\]\/70:not(.stealth-player-dark):not(.cover-poster-dark) {
+  background-color: #f8faff !important;
+  border-color: rgba(37, 99, 235, 0.12) !important;
+  box-shadow: none !important;
+}
+
+/* 3. Secondary / Nested Card Headers & List Items */
+html.theme-light [class*="bg-[#2"]:not(.stealth-player-dark):not(.stealth-player-dark *):not(.cover-poster-dark):not(.cover-poster-dark *),
+html.theme-light [class*="bg-[#162"]:not(.stealth-player-dark):not(.stealth-player-dark *):not(.cover-poster-dark):not(.cover-poster-dark *) {
+  background-color: #f1f5f9 !important;
+  border-color: rgba(37, 99, 235, 0.15) !important;
+}
+
+html.theme-light .hover\:bg-\[\#171424\]:hover,
+html.theme-light .hover\:bg-\[\#1a1628\]:hover,
+html.theme-light .hover\:bg-\[\#0d1527\]:hover,
+html.theme-light .hover\:bg-\[\#0f1b33\]:hover {
+  background-color: #e0edff !important;
+}
+
+/* 4. Universal Inputs, Textareas, Selects, Reply Sections & Recessed Wells */
+html.theme-light [class*="bg-[#0"]:not(.min-h-screen):not(header):not(nav):not(.stealth-player-dark):not(.stealth-player-dark *):not(.cover-poster-dark):not(.cover-poster-dark *) {
+  background-color: #f4f8fc !important;
+  border-color: rgba(37, 99, 235, 0.16) !important;
+  color: #0b1329 !important;
+}
+
+html.theme-light input::placeholder,
+html.theme-light textarea::placeholder {
+  color: #64748b !important;
+}
+
+/* 5. Translucent Sticky Headers & Mobile Bottom Nav */
+html.theme-light header[class*="bg-[#0"],
+html.theme-light nav[class*="bg-[#0"] {
+  background-color: rgba(255, 255, 255, 0.95) !important;
+  border-color: rgba(37, 99, 235, 0.12) !important;
+}
+
+/* 6. Neutral Translucent Buttons & Chips */
+html.theme-light .bg-white\/5:not(.stealth-player-dark *):not(.cover-poster-dark *),
+html.theme-light .bg-white\/10:not(.stealth-player-dark *):not(.cover-poster-dark *),
+html.theme-light .bg-white\/15:not(.stealth-player-dark *):not(.cover-poster-dark *) {
+  background-color: #e8f0fe !important;
+  border-color: rgba(37, 99, 235, 0.15) !important;
+  color: #0f172a !important;
+}
+
+html.theme-light .hover\:bg-white\/10:hover:not(.stealth-player-dark *):not(.cover-poster-dark *),
+html.theme-light .hover\:bg-white\/15:hover:not(.stealth-player-dark *):not(.cover-poster-dark *) {
+  background-color: #dbeafe !important;
+  color: #0b1329 !important;
+}
+
+/* Active white button in Dark Mode -> Deep Navy Ink Pill in Light Mode */
+html.theme-light .bg-white.text-\[\#0b0a10\],
+html.theme-light .bg-white.text-\[\#070b14\] {
+  background-color: #0f172a !important;
+  color: #ffffff !important;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.22) !important;
+}
+
+/* Primary blue buttons when disabled in Light Mode */
+html.theme-light .bg-\[\#2563eb\]:disabled {
+  background-color: #93c5fd !important;
+  color: #ffffff !important;
+  opacity: 0.85 !important;
+  box-shadow: none !important;
+}
+
+/* 7. Hairline Borders & Dividers */
+html.theme-light .border-white\/5:not(.stealth-player-dark *):not(.cover-poster-dark *),
+html.theme-light .border-white\/10:not(.stealth-player-dark *):not(.cover-poster-dark *),
+html.theme-light .border-white\/15:not(.stealth-player-dark *):not(.cover-poster-dark *),
+html.theme-light .border-white\/20:not(.stealth-player-dark *):not(.cover-poster-dark *) {
+  border-color: rgba(37, 99, 235, 0.14) !important;
+}
+
+/* 8. Typography Hierarchy in Light Mode */
+html.theme-light .text-white:not(.stealth-player-dark *):not(.cover-poster-dark *):not(.keep-white-text):not(.bg-\[\#2563eb\]):not(.bg-\[\#1d4ed8\]):not(.bg-emerald-500):not(.bg-rose-600):not(.bg-rose-500),
+html.theme-light .text-slate-100:not(.stealth-player-dark *):not(.cover-poster-dark *),
+html.theme-light .text-slate-200:not(.stealth-player-dark *):not(.cover-poster-dark *) {
+  color: #0b1329 !important;
+}
+
+html.theme-light .hover\:text-white:hover:not(.stealth-player-dark *):not(.cover-poster-dark *):not(.hover\:bg-\[\#2563eb\]):not(.hover\:bg-rose-500\/20) {
+  color: #1d4ed8 !important;
+}
+
+html.theme-light .group:hover .group-hover\:text-white:not(.stealth-player-dark *):not(.cover-poster-dark *) {
+  color: #1d4ed8 !important;
+}
+
+/* Preserve pure white text on solid blue, emerald, and crimson buttons/badges */
+html.theme-light .bg-\[\#2563eb\],
+html.theme-light .bg-\[\#2563eb\] *,
+html.theme-light .bg-\[\#1d4ed8\],
+html.theme-light .bg-\[\#1d4ed8\] *,
+html.theme-light .bg-emerald-500,
+html.theme-light .bg-emerald-500 *,
+html.theme-light .bg-rose-600,
+html.theme-light .bg-rose-600 *,
+html.theme-light .bg-rose-500,
+html.theme-light .bg-rose-500 *,
+html.theme-light .keep-white-text,
+html.theme-light .keep-white-text *,
+html.theme-light .hover\:bg-\[\#2563eb\]:hover,
+html.theme-light .hover\:bg-\[\#2563eb\]:hover * {
+  color: #ffffff !important;
+}
+
+/* Preserve white text inside Cover Poster Cards & Cinema Video Player */
+html.theme-light .cover-poster-dark,
+html.theme-light .cover-poster-dark .text-white,
+html.theme-light .stealth-player-dark .text-white {
+  color: #ffffff !important;
+}
+
+/* Secondary & Muted Text */
+html.theme-light .text-slate-300:not(.stealth-player-dark *):not(.cover-poster-dark *),
+html.theme-light .text-slate-300\/90:not(.stealth-player-dark *):not(.cover-poster-dark *),
+html.theme-light .text-slate-300\/80:not(.stealth-player-dark *):not(.cover-poster-dark *) {
+  color: #334155 !important;
+}
+
+html.theme-light .text-slate-400:not(.stealth-player-dark *):not(.cover-poster-dark *),
+html.theme-light .text-slate-500:not(.stealth-player-dark *):not(.cover-poster-dark *) {
+  color: #475569 !important;
+}
+
+/* 9. High-Contrast Semantic Accents in Light Mode */
+html.theme-light .text-blue-200:not(.stealth-player-dark *):not(.cover-poster-dark *):not(.bg-\[\#2563eb\] *),
+html.theme-light .text-blue-300:not(.stealth-player-dark *):not(.cover-poster-dark *):not(.bg-\[\#2563eb\] *),
+html.theme-light .text-blue-400:not(.stealth-player-dark *):not(.cover-poster-dark *),
+html.theme-light .text-purple-200:not(.stealth-player-dark *):not(.cover-poster-dark *),
+html.theme-light .text-purple-300:not(.stealth-player-dark *):not(.cover-poster-dark *),
+html.theme-light .text-purple-400:not(.stealth-player-dark *):not(.cover-poster-dark *),
+html.theme-light .text-\[\#3b82f6\]:not(.stealth-player-dark *):not(.cover-poster-dark *),
+html.theme-light .text-\[\#2563eb\]:not(.stealth-player-dark *):not(.cover-poster-dark *) {
+  color: #1d4ed8 !important;
+}
+
+html.theme-light .group:hover .group-hover\:text-blue-200:not(.cover-poster-dark *),
+html.theme-light .group:hover .group-hover\:text-blue-300:not(.cover-poster-dark *) {
+  color: #1e40af !important;
+}
+
+html.theme-light .text-emerald-200:not(.stealth-player-dark *),
+html.theme-light .text-emerald-300:not(.stealth-player-dark *),
+html.theme-light .text-emerald-400:not(.stealth-player-dark *) {
+  color: #047857 !important;
+}
+
+html.theme-light .text-amber-200:not(.stealth-player-dark *),
+html.theme-light .text-amber-300:not(.stealth-player-dark *),
+html.theme-light .text-amber-400:not(.stealth-player-dark *) {
+  color: #b45309 !important;
+}
+
+html.theme-light .text-rose-200:not(.stealth-player-dark *):not(.bg-rose-600 *),
+html.theme-light .text-rose-300:not(.stealth-player-dark *):not(.bg-rose-600 *),
+html.theme-light .text-rose-400:not(.stealth-player-dark *):not(.bg-rose-600 *) {
+  color: #be123c !important;
+}
+
+/* 10. Performance Chart SVG Adaptation in Light Mode */
+html.theme-light .chart-grid-line {
+  stroke: rgba(37, 99, 235, 0.14) !important;
+}
+
+html.theme-light .chart-score-label {
+  fill: #0b1329 !important;
+}
+
+html.theme-light .chart-axis-label {
+  fill: #475569 !important;
+}
+
+html.theme-light .chart-curve-line {
+  stroke: #2563eb !important;
+  filter: drop-shadow(0 2px 4px rgba(37, 99, 235, 0.22)) !important;
+}
+
+html.theme-light .chart-curve-dot {
+  fill: #2563eb !important;
+  stroke: #ffffff !important;
+  stroke-width: 1.5px !important;
+}
+
+/* 11. Video Player Progress Bar & Indicator */
+.stealth-range-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent !important;
+}
+
+.stealth-range-slider::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: transparent;
+}
+
+.stealth-range-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background-color: #2563eb;
+  border: 0;
+  margin-top: -4px;
+  box-shadow: 0 0 10px rgba(37, 99, 235, 0.7);
+  cursor: pointer;
+}
+
+.stealth-range-slider::-moz-range-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: transparent;
+}
+
+.stealth-range-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background-color: #2563eb;
+  border: 0;
+  box-shadow: 0 0 10px rgba(37, 99, 235, 0.7);
+  cursor: pointer;
+}
