@@ -747,6 +747,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
   // Events occurring on the selected date / range
   const selectedScheduleEvents = useMemo(() => {
     const targetDate = selectedDateStr;
+    if (!targetDate) return [];
     return allYearEvents
       .filter((ev) => targetDate >= ev.startDate && targetDate <= ev.endDate)
       .sort((a, b) => a.startDate.localeCompare(b.startDate));
@@ -754,9 +755,39 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
 
   // Birthdays on the selected date
   const selectedDateBirthdays = useMemo(() => {
+    if (!selectedDateStr) return [];
     const { d, m } = parseYMD(selectedDateStr);
     return allBirthdays.filter((b) => b.day === d && b.month0 === m);
   }, [allBirthdays, selectedDateStr]);
+
+  const clearSelection = useCallback(() => {
+    isDraggingRef.current = false;
+    dragAnchorRef.current = null;
+    dragCurrentRef.current = null;
+    setIsDragging(false);
+    setDragAnchorDate(null);
+    setDragCurrentDate(null);
+    setSelectedDateStr('');
+    setRangeStartStr('');
+    setRangeEndStr('');
+  }, []);
+
+  const handleContainerClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!isAddMode || isPopupOpen || justOpenedPopupRef.current) return;
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (
+        target.closest(
+          '[data-calendar-date], button, a, input, select, textarea, label, [role="button"]'
+        )
+      ) {
+        return;
+      }
+      clearSelection();
+    },
+    [isAddMode, isPopupOpen, clearSelection]
+  );
 
   // Month grid matrix
   const monthWeeksMatrix = useMemo(() => {
@@ -1075,7 +1106,10 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[70] bg-canvas overflow-y-auto overflow-x-hidden flex flex-col text-ink selection:bg-brand selection:text-white">
+    <div
+      onClick={handleContainerClick}
+      className="fixed inset-0 z-[70] bg-canvas overflow-y-auto overflow-x-hidden flex flex-col text-ink selection:bg-brand selection:text-white"
+    >
       {/* RADIAL GRADIENT BACKGROUND EFFECT (GPU-FREE) */}
       <div className="fixed top-0 left-1/2 -translate-x-1/2 w-[540px] max-w-[140vw] h-[250px] bg-[radial-gradient(closest-side,rgba(37,99,235,0.20),transparent)] pointer-events-none" />
 
@@ -1166,27 +1200,6 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
           </button>
         </div>
       </header>
-
-      {/* HELPER BANNER WHEN ADD MODE IS ACTIVATED BY ADMIN */}
-      {isAdmin && isAddMode && (
-        <div className="bg-emerald-500/15 border-b border-emerald-500/30 px-4 py-2.5 flex items-center justify-between gap-3 text-xs font-semibold text-emerald-300 [html.theme-light_&]:text-emerald-800">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span>
-              <strong>Modo de Adicionar ativado:</strong> Clique em um dia ou
-              clique e arraste para selecionar um período e adicionar a
-              programação.
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setIsAddMode(false)}
-            className="px-2.5 py-1 rounded-full bg-emerald-600 hover:bg-emerald-700 text-[11px] font-bold text-white shrink-0 cursor-pointer"
-          >
-            Desativar
-          </button>
-        </div>
-      )}
 
       {/* MAIN SCREEN BODY */}
       <main className="flex-1 w-full max-w-5xl mx-auto px-3 sm:px-6 md:px-8 py-5 sm:py-7 pb-24 md:pb-8 space-y-6">
@@ -1350,14 +1363,21 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                   {weekRow.map((cell, colIdx) => {
                     const { dateStr, dayNumber, month0, isCurrentMonth } = cell;
 
+                    const hasActiveRange = Boolean(
+                      activeRange.start && activeRange.end
+                    );
                     const isInActiveRange =
                       isAddMode &&
+                      hasActiveRange &&
                       dateStr >= activeRange.start &&
                       dateStr <= activeRange.end;
-                    const isRangeStart = dateStr === activeRange.start;
-                    const isRangeEnd = dateStr === activeRange.end;
+                    const isRangeStart =
+                      hasActiveRange && dateStr === activeRange.start;
+                    const isRangeEnd =
+                      hasActiveRange && dateStr === activeRange.end;
 
-                    const isSelected = dateStr === selectedDateStr;
+                    const isSelected =
+                      Boolean(selectedDateStr) && dateStr === selectedDateStr;
                     const isToday = dateStr === todayStr;
 
                     const dayEvents = allYearEvents.filter(
@@ -1545,8 +1565,14 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
 
         {/* BOTTOM SCHEDULE SECTION */}
         <section className="pt-2 border-t border-line-soft space-y-3">
-          {selectedScheduleEvents.length === 0 &&
-          selectedDateBirthdays.length === 0 ? (
+          {!selectedDateStr ? (
+            <div className="p-6 rounded-2xl bg-surface border border-line-soft text-center transform -skew-x-1 sm:-skew-x-2">
+              <p className="text-xs sm:text-sm font-semibold text-ink-muted italic">
+                Nenhuma data selecionada.
+              </p>
+            </div>
+          ) : selectedScheduleEvents.length === 0 &&
+            selectedDateBirthdays.length === 0 ? (
             <div className="p-6 rounded-2xl bg-surface border border-line-soft text-center transform -skew-x-1 sm:-skew-x-2">
               <p className="text-xs sm:text-sm font-semibold text-ink-muted italic">
                 Nenhuma programação ou evento agendado para este dia.
@@ -1679,6 +1705,9 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
           onClick={() => {
             setIsPopupOpen(false);
             setEditingEventId(null);
+            if (isAddMode) {
+              clearSelection();
+            }
           }}
           className="fixed inset-0 z-[90] bg-black/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4"
         >
@@ -1782,7 +1811,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                       setPopupStartDate(v);
                       if (popupEndDate < v) setPopupEndDate(v);
                     }}
-                    className="w-full px-3 py-2 rounded-xl bg-inset border border-line text-xs text-ink focus:outline-none focus:border-brand-soft"
+                    className="w-full px-3 py-2 rounded-xl bg-inset border border-line text-xs text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                   />
                 </div>
                 <div>
@@ -1794,7 +1823,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                     min={popupStartDate}
                     value={popupEndDate}
                     onChange={(e) => setPopupEndDate(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-inset border border-line text-xs text-ink focus:outline-none focus:border-brand-soft"
+                    className="w-full px-3 py-2 rounded-xl bg-inset border border-line text-xs text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                   />
                 </div>
               </div>
@@ -1810,7 +1839,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                   value={popupDescription}
                   onChange={(e) => setPopupDescription(e.target.value)}
                   placeholder="Detalhes adicionais para os alunos..."
-                  className="w-full px-3.5 py-2 rounded-2xl bg-inset border border-line text-xs text-ink placeholder-ink-faint focus:outline-none focus:border-brand-soft"
+                  className="w-full px-3.5 py-2 rounded-2xl bg-inset border border-line text-xs text-ink placeholder-ink-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                 />
               </div>
 

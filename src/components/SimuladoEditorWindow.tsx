@@ -7,6 +7,8 @@ import {
   Lock,
   CheckCircle2,
 } from 'lucide-react';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../firebase';
 import {
   Simulado,
   EnemArea,
@@ -48,6 +50,8 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
   const [pdfUploadProgress, setPdfUploadProgress] = useState<number>(0);
   const [pdfUploadError, setPdfUploadError] = useState<string | null>(null);
   const [answerKey, setAnswerKey] = useState<string>('A'.repeat(45));
+  const [isLoadingKey, setIsLoadingKey] = useState<boolean>(false);
+  const [keyDirty, setKeyDirty] = useState<boolean>(false);
   const [resultsReleased, setResultsReleased] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const pdfInputRef = useRef<HTMLInputElement>(null);
@@ -69,12 +73,39 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
       setPdfTitle(editingSimulado.pdfTitle || '');
       setPdfSizeLabel('');
       setPdfUploadError(null);
-      setAnswerKey(
-        (editingSimulado.answerKey || 'A'.repeat(editingSimulado.questionCount))
-          .padEnd(editingSimulado.questionCount, 'A')
-          .slice(0, editingSimulado.questionCount)
-      );
       setResultsReleased(Boolean(editingSimulado.resultsReleased));
+      setKeyDirty(false);
+      setIsLoadingKey(true);
+
+      let cancelled = false;
+      getDoc(doc(db, 'simuladoKeys', editingSimulado.id))
+        .then((snap) => {
+          if (cancelled) return;
+          const loadedKey =
+            snap.exists() && typeof snap.data()?.answerKey === 'string'
+              ? snap.data().answerKey
+              : editingSimulado.answerKey || '';
+          setAnswerKey(
+            (loadedKey || 'A'.repeat(editingSimulado.questionCount))
+              .padEnd(editingSimulado.questionCount, 'A')
+              .slice(0, editingSimulado.questionCount)
+          );
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setAnswerKey(
+            (editingSimulado.answerKey || 'A'.repeat(editingSimulado.questionCount))
+              .padEnd(editingSimulado.questionCount, 'A')
+              .slice(0, editingSimulado.questionCount)
+          );
+        })
+        .finally(() => {
+          if (!cancelled) setIsLoadingKey(false);
+        });
+
+      return () => {
+        cancelled = true;
+      };
     } else {
       setTitle('');
       setArea('MT');
@@ -86,6 +117,8 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
       setPdfSizeLabel('');
       setPdfUploadError(null);
       setAnswerKey('A'.repeat(45));
+      setIsLoadingKey(false);
+      setKeyDirty(true);
       setResultsReleased(false);
     }
   }, [editingSimulado]);
@@ -97,6 +130,7 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
     );
     setQuestionCount(clamped);
     setAnswerKey((prev) => prev.padEnd(clamped, 'A').slice(0, clamped));
+    setKeyDirty(true);
   };
 
   const handleSetOfficialBubble = (qIndex: number, opt: BubbleOption) => {
@@ -104,8 +138,10 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
       .padEnd(questionCount, 'A')
       .slice(0, questionCount)
       .split('');
+    if (chars[qIndex] === opt) return;
     chars[qIndex] = opt;
     setAnswerKey(chars.join(''));
+    setKeyDirty(true);
   };
 
   const handleUploadPdf = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -135,7 +171,7 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isUploadingPdf) return;
+    if (isUploadingPdf || isLoadingKey) return;
     if (!title.trim()) {
       setTitleError(true);
       titleInputRef.current?.focus();
@@ -163,7 +199,7 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
           pdfTitle: pdfUrl
             ? sanitizeString(pdfTitle, SCHEMA_LIMITS.TITLE_MAX, 'Simulado.pdf')
             : '',
-          answerKey: normalizedKey,
+          answerKey: isNew || keyDirty ? normalizedKey : '',
           resultsReleased,
           isPublished: true,
           authorId: editingSimulado?.authorId || currentUserUid,
@@ -233,7 +269,7 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
           <select
             value={area}
             onChange={(e) => setArea(e.target.value as EnemArea)}
-            className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
+            className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
           >
             {(Object.keys(ENEM_AREA_LABELS) as EnemArea[]).map((key) => (
               <option key={key} value={key}>
@@ -256,7 +292,7 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
             max={180}
             value={questionCount}
             onChange={(e) => handleQuestionCountChange(Number(e.target.value))}
-            className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink font-mono tabular-nums focus:outline-none focus:border-brand-soft"
+            className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink font-mono tabular-nums focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
           />
         </div>
 
@@ -301,7 +337,7 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
               max={600}
               value={timeLimitMinutes}
               onChange={(e) => setTimeLimitMinutes(Number(e.target.value))}
-              className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink font-mono tabular-nums focus:outline-none focus:border-brand-soft"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink font-mono tabular-nums focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
             />
           </div>
         )}
@@ -431,60 +467,68 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
           </span>
         </div>
 
-        <div className="max-h-72 overflow-y-auto p-3 rounded-xl bg-inset border border-line grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-          {Array.from({ length: questionCount }, (_, idx) => {
-            const currentAns = answerKey[idx] || 'A';
-            return (
-              <div
-                key={idx}
-                className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-surface-2 border border-line-soft"
-              >
-                <span className="text-xs font-mono font-bold text-ink-2 tabular-nums w-7">
-                  {String(idx + 1).padStart(2, '0')}
-                </span>
-                <div className="flex items-center gap-1">
-                  {BUBBLE_OPTIONS.map((opt) => {
-                    const active = currentAns === opt;
-                    return (
-                      <button
-                        key={opt}
-                        type="button"
-                        onClick={() => handleSetOfficialBubble(idx, opt)}
-                        className={`w-6 h-6 rounded-full text-[11px] font-bold flex items-center justify-center transition-colors cursor-pointer ${
-                          active
-                            ? 'bg-brand text-white'
-                            : 'bg-inset text-ink-muted hover:text-ink border border-line'
-                        }`}
-                      >
-                        {opt}
-                      </button>
-                    );
-                  })}
+        {isLoadingKey ? (
+          <div className="p-6 rounded-xl bg-inset border border-line text-center text-xs font-medium text-ink-muted">
+            Carregando gabarito salvo...
+          </div>
+        ) : (
+          <div className="max-h-72 overflow-y-auto p-3 rounded-xl bg-inset border border-line grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+            {Array.from({ length: questionCount }, (_, idx) => {
+              const currentAns = answerKey[idx] || 'A';
+              return (
+                <div
+                  key={idx}
+                  className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-surface-2 border border-line-soft"
+                >
+                  <span className="text-xs font-mono font-bold text-ink-2 tabular-nums w-7">
+                    {String(idx + 1).padStart(2, '0')}
+                  </span>
+                  <div className="flex items-center gap-1">
+                    {BUBBLE_OPTIONS.map((opt) => {
+                      const active = currentAns === opt;
+                      return (
+                        <button
+                          key={opt}
+                          type="button"
+                          onClick={() => handleSetOfficialBubble(idx, opt)}
+                          className={`w-6 h-6 rounded-full text-[11px] font-bold flex items-center justify-center transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft ${
+                            active
+                              ? 'bg-brand text-white'
+                              : 'bg-inset text-ink-muted hover:text-ink border border-line'
+                          }`}
+                        >
+                          {opt}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="flex items-center justify-end gap-2.5 pt-2">
         <button
           type="button"
           onClick={onCancel}
-          className="px-4 py-2 rounded-xl bg-chip hover:bg-chip-hover text-ink-2 text-xs font-semibold transition-colors cursor-pointer"
+          className="px-4 py-2 rounded-xl bg-chip hover:bg-chip-hover text-ink-2 text-xs font-semibold transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft"
         >
           Cancelar
         </button>
         <button
           type="submit"
-          disabled={isSaving || isUploadingPdf}
-          className="px-5 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
+          disabled={isSaving || isUploadingPdf || isLoadingKey}
+          className="px-5 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft"
         >
           {isSaving
             ? 'Salvando...'
             : isUploadingPdf
               ? 'Aguarde o PDF...'
-              : 'Salvar Simulado'}
+              : isLoadingKey
+                ? 'Carregando gabarito...'
+                : 'Salvar Simulado'}
         </button>
       </div>
     </form>

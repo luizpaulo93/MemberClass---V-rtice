@@ -631,7 +631,7 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
                       }))
                     }
                     placeholder="Escreva um comentário ou envie foto da resolução..."
-                    className="flex-1 min-w-0 h-10 px-3.5 rounded-xl bg-surface border border-line text-xs sm:text-sm font-medium text-ink placeholder:text-ink-faint focus:outline-none focus:border-brand-soft"
+                    className="flex-1 min-w-0 h-10 px-3.5 rounded-xl bg-surface border border-line text-xs sm:text-sm font-medium text-ink placeholder:text-ink-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                   />
 
                   <button
@@ -780,7 +780,7 @@ export const DuvidasWindow: React.FC<DuvidasWindowProps> = ({
                   value={newText}
                   onChange={(e) => setNewText(e.target.value)}
                   placeholder="Qual é a sua dúvida? Escreva aqui ou anexe uma foto da questão..."
-                  className="w-full rounded-2xl bg-surface border border-line px-4 py-3 text-sm font-medium text-ink placeholder:text-ink-faint focus:outline-none focus:border-brand-soft resize-none shadow-card"
+                  className="w-full rounded-2xl bg-surface border border-line px-4 py-3 text-sm font-medium text-ink placeholder:text-ink-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft resize-none shadow-card"
                 />
               </div>
             </div>

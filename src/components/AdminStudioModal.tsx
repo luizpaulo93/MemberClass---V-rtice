@@ -1913,7 +1913,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                       value={newFolderName}
                       onChange={(e) => setNewFolderName(e.target.value)}
                       placeholder="Digite o nome da pasta"
-                      className="flex-1 min-w-[200px] px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
+                      className="flex-1 min-w-[200px] px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                     />
                     <div className="flex items-center gap-2 shrink-0">
                       <button
@@ -1984,7 +1984,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                               onChange={(e) =>
                                 setEditingFolderName(e.target.value)
                               }
-                              className="flex-1 min-w-0 px-3 py-1.5 rounded-lg bg-inset border border-line text-xs text-ink focus:outline-none focus:border-brand-soft"
+                              className="flex-1 min-w-0 px-3 py-1.5 rounded-lg bg-inset border border-line text-xs text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                             />
                             <button
                               type="submit"
@@ -2573,7 +2573,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                           setMoveModalNewFolderName(e.target.value)
                         }
                         placeholder="Nome da nova pasta"
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-xs text-ink focus:outline-none focus:border-brand-soft"
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-xs text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                       />
                       <div className="flex items-center justify-end gap-2">
                         <button
@@ -3063,7 +3063,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                     value={turmaDescription}
                     onChange={(e) => setTurmaDescription(e.target.value)}
                     placeholder="Ex: Turno Manhã / Extensivo Enem"
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                   />
                 </div>
               </div>
@@ -3741,7 +3741,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                       value={editStuCpf}
                       onChange={(e) => setEditStuCpf(e.target.value)}
                       placeholder="000.000.000-00"
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                     />
                   </div>
 
@@ -3755,7 +3755,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                       value={editStuPhone}
                       onChange={(e) => setEditStuPhone(e.target.value)}
                       placeholder="(00) 00000-0000"
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                     />
                   </div>
 
@@ -3771,7 +3771,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                         setEditStuBirthDate(formatBirthDateInput(e.target.value))
                       }
                       placeholder="DD/MM/AAAA"
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink tabular-nums focus:outline-none focus:border-brand-soft"
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink tabular-nums focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                     />
                   </div>
                 </div>
@@ -3804,7 +3804,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                         setEditStuCourseIds([]);
                       }
                     }}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-xs font-semibold text-ink focus:outline-none focus:border-brand-soft"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-xs font-semibold text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                   >
                     <option value="">
                       Sem turma (bloqueado / apenas Teste Grátis)
@@ -3913,7 +3913,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                       value={studentSearchQuery}
                       onChange={(e) => setStudentSearchQuery(e.target.value)}
                       placeholder="Pesquisar e-mail..."
-                      className="w-full pl-8 pr-3 py-2 rounded-xl bg-surface border border-line text-xs text-ink focus:outline-none focus:border-brand-soft"
+                      className="w-full pl-8 pr-3 py-2 rounded-xl bg-surface border border-line text-xs text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                     />
                   </div>
 
@@ -4019,7 +4019,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                       }
                     }}
                     placeholder="aluno@gmail.com"
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                   />
                 </div>
 
@@ -4037,7 +4037,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                       if (studentFormError) setStudentFormError(null);
                     }}
                     placeholder="Nome do aluno"
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                   />
                 </div>
 
@@ -4058,7 +4058,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                       value={studentCpf}
                       onChange={(e) => setStudentCpf(e.target.value)}
                       placeholder="000.000.000-00"
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                     />
                   </div>
 
@@ -4072,7 +4072,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                       value={studentPhone}
                       onChange={(e) => setStudentPhone(e.target.value)}
                       placeholder="(00) 00000-0000"
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                     />
                   </div>
 
@@ -4090,7 +4090,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                         )
                       }
                       placeholder="DD/MM/AAAA"
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink tabular-nums focus:outline-none focus:border-brand-soft"
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink tabular-nums focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                     />
                   </div>
                 </div>
@@ -4121,7 +4121,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                         setStudentCourseIds([]);
                       }
                     }}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-xs font-semibold text-ink focus:outline-none focus:border-brand-soft"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-xs font-semibold text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                   >
                     <option value="">
                       Sem turma (bloqueado / apenas Teste Grátis)
@@ -4226,7 +4226,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                   maxLength={60}
                   value={brandName}
                   onChange={(e) => setBrandName(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                 />
               </div>
 
@@ -4239,7 +4239,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                   maxLength={60}
                   value={heroCtaText}
                   onChange={(e) => setHeroCtaText(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                 />
               </div>
             </div>
@@ -4253,7 +4253,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                 maxLength={140}
                 value={heroTitle}
                 onChange={(e) => setHeroTitle(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
               />
             </div>
 
@@ -4266,7 +4266,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                 maxLength={240}
                 value={heroSubtitle}
                 onChange={(e) => setHeroSubtitle(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
               />
             </div>
 

@@ -59,8 +59,11 @@ service cloud.firestore {
         && request.auth.token.email != null
         && exists(myStudentPath())
         && ('turmaId' in myStudent())
+        && myStudent().turmaId is string
+        && myStudent().turmaId.size() > 0
         && myStudent().status == 'active'
         && exists(myTurmaPath())
+        && get(myTurmaPath()).data.isPublished == true
         && (get(myTurmaPath()).data.accessAll == true || get(myTurmaPath()).data.courseIds.size() > 0);
     }
 
@@ -446,7 +449,7 @@ service cloud.firestore {
       (data.dueDate == '' || isValidDateStr(data.dueDate)) &&
       data.done is bool &&
       data.doneAtMs is int && data.doneAtMs >= 0 &&
-      data.mentorId is string && isValidId(data.mentorId) && data.mentorId == request.auth.uid &&
+      data.mentorId is string && isValidId(data.mentorId) &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -498,7 +501,7 @@ service cloud.firestore {
     }
 
     function likedByOnlySelfChanged() {
-      return incoming().likedBy.toSet().difference(existing().likedBy.toSet()).hasOnly([request.auth.uid]) ||
+      return incoming().likedBy.toSet().difference(existing().likedBy.toSet()).hasOnly([request.auth.uid]) &&
              existing().likedBy.toSet().difference(incoming().likedBy.toSet()).hasOnly([request.auth.uid]);
     }
 
@@ -702,7 +705,7 @@ service cloud.firestore {
           ])
         )
       );
-      allow delete: if isVerifiedUser() && isValidId(submissionId) && (existing().userId == request.auth.uid || isAdmin());
+      allow delete: if isVerifiedUser() && isValidId(submissionId) && isAdmin();
     }
 
     match /pdfChunks/{chunkId} {
@@ -798,9 +801,9 @@ service cloud.firestore {
       );
       allow list: if isVerifiedUser() && (
         isAdmin() ||
-        hasActiveMentoria()
+        (existing().studentEmail == emailLower() && hasActiveMentoria())
       );
-      allow create: if isVerifiedUser() && isValidId(taskId) && isValidMentoriaTask(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
+      allow create: if isVerifiedUser() && isValidId(taskId) && isValidMentoriaTask(incoming()) && incoming().mentorId == request.auth.uid && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
       allow update: if isVerifiedUser() && isValidId(taskId) && isValidMentoriaTask(incoming()) && incoming().updatedAt == request.time && (
         isAdmin() || (
           hasActiveMentoria() &&
@@ -827,11 +830,12 @@ service cloud.firestore {
       );
       allow list: if isVerifiedUser() && (
         isAdmin() ||
-        hasActiveMentoria()
+        (existing().studentEmail == emailLower() && hasActiveMentoria())
       );
       allow create: if isVerifiedUser() && isValidId(checkinId) && isValidMentoriaCheckin(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && (
         isAdmin() || (
           hasActiveMentoria() &&
+          checkinId == myStudentId() + '_' + incoming().weekStart &&
           incoming().studentEmail == emailLower() &&
           incoming().mentorFeedback == '' &&
           incoming().feedbackAtMs == 0
@@ -863,7 +867,10 @@ service cloud.firestore {
       );
       allow list: if isVerifiedUser() && (
         isAdmin() ||
-        hasActiveMentoria()
+        (
+          hasActiveMentoria() &&
+          (existing().scope == 'grupo' || existing().studentEmail == emailLower())
+        )
       );
       allow create: if isVerifiedUser() && isValidId(encontroId) && isValidMentoriaEncontro(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
       allow update: if isVerifiedUser() && isValidId(encontroId) && isValidMentoriaEncontro(incoming()) && incoming().updatedAt == request.time && isAdmin();

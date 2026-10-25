@@ -552,7 +552,7 @@ export const MentoriaWindow: React.FC<MentoriaWindowProps> = ({
                     placeholder="ex: 28"
                     value={checkinHours}
                     onChange={(e) => setCheckinHours(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink text-sm focus:outline-none focus:border-brand-soft"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                   />
                   <span className="absolute right-3.5 top-2.5 text-xs text-ink-muted">horas</span>
                 </div>
@@ -570,7 +570,7 @@ export const MentoriaWindow: React.FC<MentoriaWindowProps> = ({
                   placeholder="ex: 150"
                   value={checkinQuestions}
                   onChange={(e) => setCheckinQuestions(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink text-sm focus:outline-none focus:border-brand-soft"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                 />
               </div>
 
@@ -610,7 +610,7 @@ export const MentoriaWindow: React.FC<MentoriaWindowProps> = ({
                 placeholder="Consegui cumprir o cronograma de eletrodinâmica e acertei 85% dos exercícios..."
                 value={checkinWins}
                 onChange={(e) => setCheckinWins(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink text-sm focus:outline-none focus:border-brand-soft resize-none"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft resize-none"
               />
             </div>
 
@@ -625,7 +625,7 @@ export const MentoriaWindow: React.FC<MentoriaWindowProps> = ({
                 placeholder="Tive dificuldade em gerenciar o tempo na prova de natureza..."
                 value={checkinDifficulties}
                 onChange={(e) => setCheckinDifficulties(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink text-sm focus:outline-none focus:border-brand-soft resize-none"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft resize-none"
               />
             </div>
 

@@ -532,7 +532,7 @@ export const AdminMentoriaTab: React.FC<AdminMentoriaTabProps> = ({
                 placeholder="Buscar por nome ou e-mail..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-3.5 py-2 rounded-xl bg-inset border border-line text-xs text-ink focus:outline-none focus:border-brand-soft"
+                className="w-full pl-9 pr-3.5 py-2 rounded-xl bg-inset border border-line text-xs text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
               />
             </div>
           </div>
@@ -968,7 +968,7 @@ export const AdminMentoriaTab: React.FC<AdminMentoriaTabProps> = ({
                                   [chk.id]: e.target.value,
                                 }))
                               }
-                              className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink text-xs focus:outline-none focus:border-brand-soft resize-none"
+                              className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink text-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft resize-none"
                             />
                             <div className="flex justify-end">
                               <button
@@ -1169,7 +1169,7 @@ export const AdminMentoriaTab: React.FC<AdminMentoriaTabProps> = ({
                     placeholder="ex: ENEM 2026"
                     value={enrollExamTarget}
                     onChange={(e) => setEnrollExamTarget(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus:border-brand-soft text-xs"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft text-xs"
                   />
                 </div>
 
@@ -1184,7 +1184,7 @@ export const AdminMentoriaTab: React.FC<AdminMentoriaTabProps> = ({
                     placeholder="25"
                     value={enrollHoursTarget}
                     onChange={(e) => setEnrollHoursTarget(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus:border-brand-soft text-xs"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft text-xs"
                   />
                 </div>
               </div>
@@ -1196,7 +1196,7 @@ export const AdminMentoriaTab: React.FC<AdminMentoriaTabProps> = ({
                     type="date"
                     value={enrollStartDate}
                     onChange={(e) => setEnrollStartDate(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus:border-brand-soft text-xs"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft text-xs"
                   />
                 </div>
 
@@ -1205,7 +1205,7 @@ export const AdminMentoriaTab: React.FC<AdminMentoriaTabProps> = ({
                   <select
                     value={enrollStatus}
                     onChange={(e) => setEnrollStatus(e.target.value as MentoriaStatus)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus:border-brand-soft text-xs"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft text-xs"
                   >
                     <option value="active">Ativa</option>
                     <option value="paused">Pausada</option>
@@ -1281,7 +1281,7 @@ export const AdminMentoriaTab: React.FC<AdminMentoriaTabProps> = ({
                   <select
                     value={taskKind}
                     onChange={(e) => setTaskKind(e.target.value as TaskKind)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus:border-brand-soft text-xs"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft text-xs"
                   >
                     <option value="questoes">Questões</option>
                     <option value="aula">Aula</option>
@@ -1299,7 +1299,7 @@ export const AdminMentoriaTab: React.FC<AdminMentoriaTabProps> = ({
                     type="date"
                     value={taskDueDate}
                     onChange={(e) => setTaskDueDate(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus:border-brand-soft text-xs"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft text-xs"
                   />
                 </div>
               </div>
@@ -1314,7 +1314,7 @@ export const AdminMentoriaTab: React.FC<AdminMentoriaTabProps> = ({
                   placeholder="ex: Focar nas questões de refração e espelhos esféricos..."
                   value={taskDescription}
                   onChange={(e) => setTaskDescription(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus:border-brand-soft resize-none text-xs"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft resize-none text-xs"
                 />
               </div>
 
@@ -1364,7 +1364,7 @@ export const AdminMentoriaTab: React.FC<AdminMentoriaTabProps> = ({
                   <select
                     value={encontroScope}
                     onChange={(e) => setEncontroScope(e.target.value as 'individual' | 'grupo')}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus:border-brand-soft text-xs"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft text-xs"
                   >
                     <option value="individual">Individual ({selectedStudent?.name || 'Aluno'})</option>
                     <option value="grupo">Em Grupo (Todos os alunos da mentoria)</option>
@@ -1379,7 +1379,7 @@ export const AdminMentoriaTab: React.FC<AdminMentoriaTabProps> = ({
                     max="600"
                     value={encontroDurationMin}
                     onChange={(e) => setEncontroDurationMin(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus:border-brand-soft text-xs"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft text-xs"
                   />
                 </div>
               </div>
@@ -1412,7 +1412,7 @@ export const AdminMentoriaTab: React.FC<AdminMentoriaTabProps> = ({
                     type="date"
                     value={encontroDate}
                     onChange={(e) => setEncontroDate(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus:border-brand-soft text-xs"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft text-xs"
                   />
                 </div>
 
@@ -1422,7 +1422,7 @@ export const AdminMentoriaTab: React.FC<AdminMentoriaTabProps> = ({
                     type="time"
                     value={encontroTime}
                     onChange={(e) => setEncontroTime(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus:border-brand-soft text-xs"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft text-xs"
                   />
                 </div>
               </div>
@@ -1437,7 +1437,7 @@ export const AdminMentoriaTab: React.FC<AdminMentoriaTabProps> = ({
                   placeholder="https://meet.google.com/..."
                   value={encontroLink}
                   onChange={(e) => setEncontroLink(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus:border-brand-soft text-xs"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft text-xs"
                 />
               </div>
 
@@ -1451,7 +1451,7 @@ export const AdminMentoriaTab: React.FC<AdminMentoriaTabProps> = ({
                   placeholder="ex: Avaliação dos últimos simulados e organização da reta final..."
                   value={encontroDescription}
                   onChange={(e) => setEncontroDescription(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus:border-brand-soft resize-none text-xs"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft resize-none text-xs"
                 />
               </div>
 

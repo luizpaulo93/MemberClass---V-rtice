@@ -123,9 +123,20 @@ function withId<T>(snap: { id: string; data(): unknown }): T {
   return { ...(snap.data() as object), id: snap.id } as T;
 }
 
+function isPermissionDeniedError(err: unknown): boolean {
+  const code = (err as { code?: string })?.code || '';
+  const msg = String((err as Error)?.message || '').toLowerCase();
+  return (
+    code === 'permission-denied' ||
+    code === 'firestore/permission-denied' ||
+    msg.includes('permission') ||
+    msg.includes('insufficient permissions')
+  );
+}
+
 // ---------------------------------------------------------------- ALUNO (leitura)
 
-/** Matrícula do próprio aluno. cb recebe null se não existir. */
+/** Matrícula do próprio aluno. cb recebe null se não existir ou sem permissão. */
 export function subscribeMyMentoria(
   email: string,
   cb: (m: Mentoria | null) => void
@@ -136,7 +147,9 @@ export function subscribeMyMentoria(
     (snap) => cb(snap.exists() ? withId<Mentoria>(snap) : null),
     (err) => {
       cb(null);
-      handleFirestoreError(err, OperationType.GET, `mentorias/${id}`);
+      if (!isPermissionDeniedError(err)) {
+        handleFirestoreError(err, OperationType.GET, `mentorias/${id}`);
+      }
     }
   );
 }
@@ -154,7 +167,9 @@ export function subscribeMyTasks(
     (snap) => cb(snap.docs.map((d) => withId<MentoriaTask>(d))),
     (err) => {
       cb([]);
-      handleFirestoreError(err, OperationType.LIST, 'mentoriaTasks');
+      if (!isPermissionDeniedError(err)) {
+        handleFirestoreError(err, OperationType.LIST, 'mentoriaTasks');
+      }
     }
   );
 }
@@ -172,7 +187,9 @@ export function subscribeMyCheckins(
     (snap) => cb(snap.docs.map((d) => withId<MentoriaCheckin>(d))),
     (err) => {
       cb([]);
-      handleFirestoreError(err, OperationType.LIST, 'mentoriaCheckins');
+      if (!isPermissionDeniedError(err)) {
+        handleFirestoreError(err, OperationType.LIST, 'mentoriaCheckins');
+      }
     }
   );
 }
@@ -196,7 +213,13 @@ export function subscribeMyEncontros(
       individual = snap.docs.map((d) => withId<MentoriaEncontro>(d));
       emit();
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, 'mentoriaEncontros')
+    (err) => {
+      individual = [];
+      emit();
+      if (!isPermissionDeniedError(err)) {
+        handleFirestoreError(err, OperationType.LIST, 'mentoriaEncontros');
+      }
+    }
   );
   const u2 = onSnapshot(
     query(collection(db, 'mentoriaEncontros'), where('scope', '==', 'grupo')),
@@ -204,7 +227,13 @@ export function subscribeMyEncontros(
       grupo = snap.docs.map((d) => withId<MentoriaEncontro>(d));
       emit();
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, 'mentoriaEncontros')
+    (err) => {
+      grupo = [];
+      emit();
+      if (!isPermissionDeniedError(err)) {
+        handleFirestoreError(err, OperationType.LIST, 'mentoriaEncontros');
+      }
+    }
   );
   return () => {
     u1();

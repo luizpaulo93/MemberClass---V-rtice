@@ -952,19 +952,24 @@ export default function App() {
   const userEmailVerified = Boolean(user?.emailVerified);
 
   const [isAdminDoc, setIsAdminDoc] = useState<boolean>(false);
+  const [adminCheckDone, setAdminCheckDone] = useState<boolean>(false);
 
   useEffect(() => {
     if (!verifiedAuthUid) {
       setIsAdminDoc(false);
+      setAdminCheckDone(false);
       return;
     }
+    setAdminCheckDone(false);
     const unsubAdmin = onSnapshot(
       doc(db, 'admins', verifiedAuthUid),
       (snap) => {
         setIsAdminDoc(snap.exists());
+        setAdminCheckDone(true);
       },
       () => {
         setIsAdminDoc(false);
+        setAdminCheckDone(true);
       }
     );
     return () => unsubAdmin();
@@ -1319,7 +1324,12 @@ export default function App() {
           } else {
             setMyStudentRecord(null);
             saveFastBootCache({ myStudentRecord: null });
-            if (!isAdmin && !autoCreatedSelf && auth.currentUser?.email) {
+            if (
+              adminCheckDone &&
+              !isAdmin &&
+              !autoCreatedSelf &&
+              auth.currentUser?.email
+            ) {
               autoCreatedSelf = true;
               const defaultName = sanitizeString(
                 auth.currentUser.displayName ||
@@ -1378,7 +1388,7 @@ export default function App() {
       unsubMyStudent();
       unsubTurmas();
     };
-  }, [authResolved, verifiedAuthUid, userEmail, isAdmin]);
+  }, [authResolved, verifiedAuthUid, userEmail, isAdmin, adminCheckDone]);
 
   // Fase 1.8: Lazy Calendar Events subscription (only when Calendar is open, filtered by visible year)
   useEffect(() => {
@@ -4872,7 +4882,7 @@ export default function App() {
                       setProfilePhoneInput(formatPhoneValue(e.target.value))
                     }
                     placeholder="(00) 00000-0000"
-                    className="w-full px-4 py-2.5 rounded-xl bg-inset border border-line text-sm font-medium text-ink tabular-nums focus:outline-none focus:border-brand-soft"
+                    className="w-full px-4 py-2.5 rounded-xl bg-inset border border-line text-sm font-medium text-ink tabular-nums focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                   />
                 </div>
 
@@ -4890,7 +4900,7 @@ export default function App() {
                       )
                     }
                     placeholder="DD/MM/AAAA"
-                    className="w-full px-4 py-2.5 rounded-xl bg-inset border border-line text-sm font-medium text-ink tabular-nums focus:outline-none focus:border-brand-soft"
+                    className="w-full px-4 py-2.5 rounded-xl bg-inset border border-line text-sm font-medium text-ink tabular-nums focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                   />
                 </div>
               </div>
