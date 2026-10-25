@@ -1,4 +1,4 @@
-// src/utils/pdfStorage.ts — Upload e leitura de PDFs de alta velocidade (compatível com os PDFs já salvos e com o firestore.rules)
+// src/utils/pdfStorage.ts — Upload e leitura de PDFs otimizados (compatível com os PDFs já salvos e com o firestore.rules)
 //
 // Formato das partes de PDF:
 //   documento:  pdfChunks/{pdfId}_{índice}          (sem zeros à esquerda)
@@ -18,13 +18,35 @@ import { auth, db } from '../firebase';
 import { SCHEMA_LIMITS, generateSafeId, sanitizeString } from '../types';
 
 const PDF_CHUNK_COLLECTION = 'pdfChunks';
-// Tamanho otimizado de cada parte (regra aceita até 750.000 caracteres)
-const CHUNK_CHAR_SIZE = 735_000;
+// Cada parte tem ~650 KB (8 × 650 KB ≈ 5,2 MB por writeBatch, abaixo do limite de 10 MiB do Firestore e de 750.000 chars da regra)
+const CHUNK_CHAR_SIZE = 650_000;
 const MAX_CHUNKS = 200; // regra: chunkIndex <= 200
-// Quantidade de partes enviadas por lote (writeBatch) e lotes simultâneos
-const CHUNKS_PER_BATCH = 5;
-const BATCH_CONCURRENCY = 4;
-const SINGLE_CHUNK_CONCURRENCY = 12;
+const CHUNKS_PER_BATCH = 8;
+const BATCH_CONCURRENCY = 2;
+const INLINE_MAX_CHARS = 500_000;
+const SINGLE_CHUNK_CONCURRENCY = 8;
+
+/**
+ * Executa tarefas assíncronas sobre uma lista com limite máximo de concorrência.
+ */
+export async function runWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<void>
+): Promise<void> {
+  if (items.length === 0) return;
+  const concurrency = Math.max(1, Math.min(limit, items.length));
+  let nextIdx = 0;
+
+  await Promise.all(
+    Array.from({ length: concurrency }, async () => {
+      while (nextIdx < items.length) {
+        const currentIndex = nextIdx++;
+        await worker(items[currentIndex], currentIndex);
+      }
+    })
+  );
+}
 
 export interface StudentPdfWatermarkInfo {
   name: string;
@@ -42,7 +64,7 @@ export function getStudentPdfWatermarkInfo(): StudentPdfWatermarkInfo | null {
   return activeStudentPdfWatermark;
 }
 
-// Bytes originais em memória (abrir o mesmo PDF ou um PDF recém-enviado fica instantâneo)
+// Bytes originais em memória (abrir o mesmo PDF de novo fica instantâneo)
 const rawPdfBytesCache = new Map<string, Uint8Array>();
 
 function sanitizePdfLatin1Text(text: string): string {
@@ -92,50 +114,14 @@ async function applyEdgeWatermarkToPdfBytes(
   }
 }
 
-export function readBlobAsDataUrl(blob: Blob): Promise<string> {
+export function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ''));
     reader.onerror = () =>
       reject(reader.error || new Error('Erro ao ler arquivo PDF'));
-    reader.readAsDataURL(blob);
+    reader.readAsDataURL(file);
   });
-}
-
-export function readFileAsDataUrl(file: File): Promise<string> {
-  return readBlobAsDataUrl(file);
-}
-
-/**
- * Compacta o arquivo PDF nativamente em GZIP (C++ no navegador) quando isso reduz o tamanho,
- * gerando menos blocos para enviar ao Firestore.
- */
-async function readFileAsOptimizedDataUrl(
-  file: File
-): Promise<{ dataUrl: string; rawBytes: Uint8Array }> {
-  const buf = await file.arrayBuffer();
-  const rawBytes = new Uint8Array(buf);
-
-  if (typeof CompressionStream !== 'undefined') {
-    try {
-      const cs = new CompressionStream('gzip');
-      const compressedStream = new Blob([rawBytes]).stream().pipeThrough(cs);
-      const compressedBuf = await new Response(compressedStream).arrayBuffer();
-      if (compressedBuf.byteLength < rawBytes.byteLength * 0.96) {
-        const compressedBlob = new Blob([compressedBuf], {
-          type: 'application/x-gzip-pdf',
-        });
-        const dataUrl = await readBlobAsDataUrl(compressedBlob);
-        return { dataUrl, rawBytes };
-      }
-    } catch {
-      // fallback para PDF sem compressão extra se CompressionStream não estiver disponível
-    }
-  }
-
-  const pdfBlob = new Blob([rawBytes], { type: 'application/pdf' });
-  const dataUrl = await readBlobAsDataUrl(pdfBlob);
-  return { dataUrl, rawBytes };
 }
 
 function formatFileSizeLabel(bytes: number): string {
@@ -157,11 +143,15 @@ function parseChunkedUrl(
     !pdfId ||
     !Number.isFinite(totalChunks) ||
     totalChunks < 1 ||
-    totalChunks > MAX_CHUNKS
+    totalChunks > MAX_CHUNKS + 1
   ) {
     return null;
   }
   return { pdfId, totalChunks };
+}
+
+function chunkDocId(pdfId: string, idx: number): string {
+  return `${pdfId}_${idx}`;
 }
 
 async function uploadDataUrlToPdfChunks(
@@ -175,104 +165,62 @@ async function uploadDataUrlToPdfChunks(
   }
 
   const effectiveAuthorId = auth.currentUser?.uid || authorId;
-  const pdfId = generateSafeId('pdf');
+  const pdfId = generateSafeId('pdfdoc');
   const totalChunks = Math.max(1, Math.ceil(dataUrl.length / CHUNK_CHAR_SIZE));
 
   if (totalChunks > MAX_CHUNKS) {
     throw new Error(
-      'O arquivo PDF excede o limite máximo permitido pela plataforma.'
+      'O arquivo PDF excede o limite máximo suportado pela plataforma.'
     );
   }
 
-  let completed = 0;
-
-  // Agrupa os blocos em lotes (writeBatch) para reduzir drasticamente o número de round-trips de rede
+  // Agrupa os índices em lotes de até 8 partes (8 × 650 KB ≈ 5,2 MB < 10 MiB por writeBatch)
   const batchGroups: number[][] = [];
   for (let start = 0; start < totalChunks; start += CHUNKS_PER_BATCH) {
+    const end = Math.min(totalChunks, start + CHUNKS_PER_BATCH);
     const group: number[] = [];
-    for (
-      let idx = start;
-      idx < Math.min(totalChunks, start + CHUNKS_PER_BATCH);
-      idx++
-    ) {
+    for (let idx = start; idx < end; idx++) {
       group.push(idx);
     }
     batchGroups.push(group);
   }
 
-  let nextBatchIdx = 0;
+  let completedChunks = 0;
 
-  const uploadBatchGroup = async (indices: number[]) => {
-    try {
-      const batch = writeBatch(db);
-      const ts = serverTimestamp();
-      for (const i of indices) {
-        const slice = dataUrl.slice(
-          i * CHUNK_CHAR_SIZE,
-          (i + 1) * CHUNK_CHAR_SIZE
-        );
-        const chunkRef = doc(db, PDF_CHUNK_COLLECTION, `${pdfId}_${i}`);
-        batch.set(chunkRef, {
-          pdfId,
-          chunkIndex: i,
-          totalChunks,
-          data: slice,
-          authorId: effectiveAuthorId,
-          isFree: Boolean(isFree),
-          createdAt: ts,
-        });
-      }
-      await batch.commit();
-      completed += indices.length;
-      onProgress?.(Math.min(100, Math.round((completed / totalChunks) * 100)));
-    } catch {
-      // Fallback individual em paralelo caso algum lote falhe
-      await Promise.all(
-        indices.map(async (i) => {
-          const slice = dataUrl.slice(
-            i * CHUNK_CHAR_SIZE,
-            (i + 1) * CHUNK_CHAR_SIZE
-          );
-          await setDoc(doc(db, PDF_CHUNK_COLLECTION, `${pdfId}_${i}`), {
-            pdfId,
-            chunkIndex: i,
-            totalChunks,
-            data: slice,
-            authorId: effectiveAuthorId,
-            isFree: Boolean(isFree),
-            createdAt: serverTimestamp(),
-          });
-          completed++;
-          onProgress?.(
-            Math.min(100, Math.round((completed / totalChunks) * 100))
-          );
-        })
+  await runWithConcurrency(batchGroups, BATCH_CONCURRENCY, async (indices) => {
+    const batch = writeBatch(db);
+    const ts = serverTimestamp();
+
+    for (const idx of indices) {
+      const startOffset = idx * CHUNK_CHAR_SIZE;
+      const chunkData = dataUrl.slice(
+        startOffset,
+        startOffset + CHUNK_CHAR_SIZE
       );
+      batch.set(doc(db, PDF_CHUNK_COLLECTION, chunkDocId(pdfId, idx)), {
+        pdfId,
+        chunkIndex: idx,
+        totalChunks,
+        data: chunkData,
+        authorId: effectiveAuthorId,
+        isFree: Boolean(isFree),
+        createdAt: ts,
+      });
     }
-  };
 
-  const batchWorker = async () => {
-    while (nextBatchIdx < batchGroups.length) {
-      const group = batchGroups[nextBatchIdx++];
-      if (group) {
-        await uploadBatchGroup(group);
-      }
-    }
-  };
-
-  await Promise.all(
-    Array.from(
-      { length: Math.min(BATCH_CONCURRENCY, batchGroups.length) },
-      () => batchWorker()
-    )
-  );
+    await batch.commit();
+    completedChunks += indices.length;
+    onProgress?.(
+      Math.min(100, Math.round((completedChunks / totalChunks) * 100))
+    );
+  });
 
   return `chunked:${pdfId}:${totalChunks}`;
 }
 
 /**
- * Garante que qualquer PDF salvo anteriormente como data URL inline seja migrado
- * para `pdfChunks`, evitando que documentos de aula com vários PDFs ultrapassem 1 MB.
+ * Converte um PDF inline (`data:...`) em partes no `pdfChunks` quando necessário
+ * (por exemplo, quando uma aula possui múltiplos PDFs que juntos passariam de 1 MB).
  */
 export async function ensurePdfUrlChunked(
   pdfUrl: string,
@@ -286,8 +234,10 @@ export async function ensurePdfUrlChunked(
 }
 
 /**
- * Envia um arquivo PDF para o Firestore dividindo em partes na coleção `pdfChunks`
- * com compactação GZIP automática e escrita em lote paralela.
+ * Envia o PDF para o Firestore.
+ * - Lê o arquivo uma única vez em base64.
+ * - Se for pequeno (<= 500.000 caracteres), retorna inline.
+ * - Caso contrário, grava em lotes (`writeBatch` de até 8 partes, 2 lotes em paralelo).
  */
 export async function uploadPdfToFirestore(
   file: File,
@@ -295,19 +245,24 @@ export async function uploadPdfToFirestore(
   onProgress?: (percent: number) => void,
   isFree = false
 ): Promise<string> {
-  onProgress?.(8);
-  const { dataUrl, rawBytes } = await readFileAsOptimizedDataUrl(file);
-  onProgress?.(18);
-  const chunkedRef = await uploadDataUrlToPdfChunks(
+  const dataUrl = await readFileAsDataUrl(file);
+  onProgress?.(10);
+
+  if (dataUrl.length <= INLINE_MAX_CHARS) {
+    onProgress?.(100);
+    return dataUrl;
+  }
+
+  const ref = await uploadDataUrlToPdfChunks(
     dataUrl,
     authorId,
     (pct) => {
-      onProgress?.(Math.min(100, 18 + Math.round(pct * 0.82)));
+      onProgress?.(Math.min(100, 10 + Math.round(pct * 0.9)));
     },
     isFree
   );
-  rawPdfBytesCache.set(chunkedRef, rawBytes);
-  return chunkedRef;
+
+  return ref;
 }
 
 export async function uploadPdfFileToCloud(
@@ -337,22 +292,14 @@ export async function updatePdfChunksIsFree(
   const parsed = parseChunkedUrl(pdfUrl);
   if (!parsed) return;
   const { pdfId, totalChunks } = parsed;
+  const indices = Array.from({ length: totalChunks }, (_, i) => i);
 
   try {
-    let nextIndex = 0;
-    const worker = async () => {
-      while (nextIndex < totalChunks) {
-        const i = nextIndex++;
-        const chunkRef = doc(db, PDF_CHUNK_COLLECTION, `${pdfId}_${i}`);
-        await updateDoc(chunkRef, { isFree: Boolean(isFree) });
-      }
-    };
-    await Promise.all(
-      Array.from(
-        { length: Math.min(SINGLE_CHUNK_CONCURRENCY, totalChunks) },
-        () => worker()
-      )
-    );
+    await runWithConcurrency(indices, SINGLE_CHUNK_CONCURRENCY, async (idx) => {
+      await updateDoc(doc(db, PDF_CHUNK_COLLECTION, chunkDocId(pdfId, idx)), {
+        isFree: Boolean(isFree),
+      });
+    });
   } catch (err) {
     console.warn('Erro ao sincronizar isFree nos pdfChunks:', err);
   }
@@ -366,21 +313,12 @@ export async function deletePdfFromFirestore(pdfUrl: string): Promise<void> {
   const parsed = parseChunkedUrl(pdfUrl);
   if (!parsed) return;
   const { pdfId, totalChunks } = parsed;
+  const indices = Array.from({ length: totalChunks }, (_, i) => i);
 
   try {
-    let nextIndex = 0;
-    const worker = async () => {
-      while (nextIndex < totalChunks) {
-        const i = nextIndex++;
-        await deleteDoc(doc(db, PDF_CHUNK_COLLECTION, `${pdfId}_${i}`));
-      }
-    };
-    await Promise.all(
-      Array.from(
-        { length: Math.min(SINGLE_CHUNK_CONCURRENCY, totalChunks) },
-        () => worker()
-      )
-    );
+    await runWithConcurrency(indices, SINGLE_CHUNK_CONCURRENCY, async (idx) => {
+      await deleteDoc(doc(db, PDF_CHUNK_COLLECTION, chunkDocId(pdfId, idx)));
+    });
   } catch (err) {
     console.error('Erro ao excluir blocos do PDF:', err);
   }
@@ -400,7 +338,7 @@ async function decodeDataUrlToPdfBytes(
       bytes[i] = binary.charCodeAt(i);
     }
 
-    // Se os bytes estiverem compactados em GZIP (magic bytes 0x1f 0x8b ou MIME x-gzip-pdf), descompacta nativamente
+    // Compatibilidade com qualquer PDF salvo anteriormente com compressão GZIP
     const isGzip =
       dataUrl.startsWith('data:application/x-gzip-pdf') ||
       (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b);
@@ -431,16 +369,22 @@ async function resolveRawPdfBytes(url: string): Promise<Uint8Array | null> {
     if (!parsed) return null;
     const { pdfId, totalChunks } = parsed;
 
-    const chunkPromises = Array.from({ length: totalChunks }, async (_, i) => {
-      const snap = await getDoc(doc(db, PDF_CHUNK_COLLECTION, `${pdfId}_${i}`));
+    const parts = new Array<string>(totalChunks).fill('');
+    const indices = Array.from({ length: totalChunks }, (_, i) => i);
+
+    await runWithConcurrency(indices, SINGLE_CHUNK_CONCURRENCY, async (idx) => {
+      const snap = await getDoc(
+        doc(db, PDF_CHUNK_COLLECTION, chunkDocId(pdfId, idx))
+      );
       if (!snap.exists()) {
-        throw new Error(`Parte ${i + 1}/${totalChunks} do PDF não encontrada.`);
+        throw new Error(
+          `Parte ${idx + 1}/${totalChunks} do PDF não encontrada.`
+        );
       }
       const data = snap.data() as { data?: string };
-      return typeof data?.data === 'string' ? data.data : '';
+      parts[idx] = typeof data?.data === 'string' ? data.data : '';
     });
 
-    const parts = await Promise.all(chunkPromises);
     const fullDataUrl = parts.join('');
     const bytes = await decodeDataUrlToPdfBytes(fullDataUrl);
     if (bytes) {

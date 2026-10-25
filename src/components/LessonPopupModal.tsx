@@ -21,7 +21,11 @@ import {
   hasLessonVideo,
 } from '../types';
 import { CoverArtwork } from './CoverArtwork';
-import { ensurePdfUrlChunked, uploadPdfFileToCloud } from '../utils/pdfStorage';
+import {
+  ensurePdfUrlChunked,
+  runWithConcurrency,
+  uploadPdfFileToCloud,
+} from '../utils/pdfStorage';
 import { compressImageToDataUrl } from '../utils/imageCompress';
 
 interface LessonPopupModalProps {
@@ -164,48 +168,50 @@ export const LessonPopupModal: React.FC<LessonPopupModalProps> = ({
     setPdfError(null);
 
     if (pdfs.length >= SCHEMA_LIMITS.MAX_PDFS) {
-      setPdfError(`Limite máximo de ${SCHEMA_LIMITS.MAX_PDFS} PDFs por aula atingido.`);
+      setPdfError(
+        `Limite máximo de ${SCHEMA_LIMITS.MAX_PDFS} PDFs por aula atingido.`
+      );
       return;
     }
 
     const remainingSlots = Math.max(0, SCHEMA_LIMITS.MAX_PDFS - pdfs.length);
     const filesToUpload = selectedFiles.slice(0, remainingSlots);
+    const skippedCount = selectedFiles.length - filesToUpload.length;
 
     setUploadingPdf(true);
-    setPdfUploadPct(8);
+    setPdfUploadPct(1);
     const isLessonFree = editingLesson
       ? Boolean(editingLesson.isFree)
       : Boolean(defaultIsFree);
     const activeUid = auth.currentUser?.uid || currentUserUid;
 
+    const progressByFile = new Array<number>(filesToUpload.length).fill(0);
+    const resultsByIndex = new Array<PdfAttachment | null>(
+      filesToUpload.length
+    ).fill(null);
+    const failedNames: string[] = [];
+
+    const updateOverallProgress = () => {
+      const sum = progressByFile.reduce((acc, val) => acc + val, 0);
+      const avg = Math.round(sum / filesToUpload.length);
+      setPdfUploadPct(Math.max(1, Math.min(100, avg)));
+    };
+
     try {
-      const fileProgress = new Array<number>(filesToUpload.length).fill(0);
-      const updateOverallProgress = () => {
-        const sum = fileProgress.reduce((acc, v) => acc + v, 0);
-        const avg = Math.round(sum / filesToUpload.length);
-        setPdfUploadPct(Math.max(8, Math.min(100, avg)));
-      };
-
-      let nextFileIdx = 0;
-      const FILE_CONCURRENCY = 3;
-
-      const fileWorker = async () => {
-        while (nextFileIdx < filesToUpload.length) {
-          const i = nextFileIdx++;
-          const file = filesToUpload[i];
-          if (!file) continue;
+      await runWithConcurrency(filesToUpload, 3, async (file, index) => {
+        try {
           const uploaded = await uploadPdfFileToCloud(
             file,
             activeUid,
             (pct) => {
-              fileProgress[i] = pct;
+              progressByFile[index] = pct;
               updateOverallProgress();
             },
             isLessonFree
           );
-          fileProgress[i] = 100;
+          progressByFile[index] = 100;
           updateOverallProgress();
-          const item: PdfAttachment = {
+          resultsByIndex[index] = {
             id: generateSafeId('pdf'),
             title: sanitizeString(
               uploaded.pdfTitle,
@@ -215,19 +221,32 @@ export const LessonPopupModal: React.FC<LessonPopupModalProps> = ({
             url: uploaded.pdfUrl,
             sizeLabel: sanitizeString(uploaded.sizeLabel, 40, 'PDF'),
           };
-          setPdfs((prev) => [...prev, item].slice(0, SCHEMA_LIMITS.MAX_PDFS));
+        } catch (err) {
+          console.error(`Erro ao enviar PDF "${file.name}":`, err);
+          progressByFile[index] = 100;
+          updateOverallProgress();
+          failedNames.push(file.name);
         }
-      };
+      });
 
-      await Promise.all(
-        Array.from(
-          { length: Math.min(FILE_CONCURRENCY, filesToUpload.length) },
-          () => fileWorker()
-        )
+      const uploadedItems = resultsByIndex.filter(
+        (item): item is PdfAttachment => item !== null
       );
-    } catch (err) {
-      console.error('Erro ao subir PDF da aula:', err);
-      setPdfError('Não foi possível enviar o PDF. Tente novamente.');
+      if (uploadedItems.length > 0) {
+        setPdfs((prev) =>
+          [...prev, ...uploadedItems].slice(0, SCHEMA_LIMITS.MAX_PDFS)
+        );
+      }
+
+      if (failedNames.length > 0) {
+        setPdfError(
+          `${failedNames.length} arquivo(s) não puderam ser enviados: ${failedNames.join(', ')}`
+        );
+      } else if (skippedCount > 0) {
+        setPdfError(
+          `Limite de ${SCHEMA_LIMITS.MAX_PDFS} PDFs por aula respeitado (${skippedCount} arquivo(s) excedente(s) ignorado(s)).`
+        );
+      }
     } finally {
       setUploadingPdf(false);
       setPdfUploadPct(0);
@@ -252,17 +271,26 @@ export const LessonPopupModal: React.FC<LessonPopupModalProps> = ({
         : Boolean(defaultIsFree);
       const activeUid = auth.currentUser?.uid || currentUserUid;
 
-      // Garante que qualquer PDF antigo em base64 inline seja migrado para pdfChunks
-      // antes de salvar a aula, evitando ultrapassar o limite de 1 MB por documento
+      const validPdfs = pdfs
+        .slice(0, SCHEMA_LIMITS.MAX_PDFS)
+        .filter((p) => p && p.url && p.url.trim());
+
+      // Se a soma dos PDFs inline (data:) + capa ultrapassar 500 KB, migra os inline para pdfChunks
+      // para nunca estourar o limite de 1 MB do documento da aula no Firestore.
+      const totalInlineChars =
+        validPdfs.reduce(
+          (acc, p) => acc + (p.url.startsWith('data:') ? p.url.length : 0),
+          0
+        ) + (thumbnailUrl.startsWith('data:') ? thumbnailUrl.length : 0);
+      const shouldChunkInlinePdfs =
+        validPdfs.length > 1 && totalInlineChars > 500_000;
+
       const normalizedPdfs: PdfAttachment[] = [];
-      for (const p of pdfs.slice(0, SCHEMA_LIMITS.MAX_PDFS)) {
-        if (!p || !p.url || !p.url.trim()) continue;
-        const chunkedUrl = await ensurePdfUrlChunked(
-          p.url.trim(),
-          activeUid,
-          isLessonFree
-        );
-        if (!chunkedUrl) continue;
+      for (const p of validPdfs) {
+        const finalUrl = shouldChunkInlinePdfs
+          ? await ensurePdfUrlChunked(p.url.trim(), activeUid, isLessonFree)
+          : p.url.trim();
+        if (!finalUrl) continue;
         normalizedPdfs.push({
           id: sanitizeString(
             p.id || generateSafeId('pdf'),
@@ -274,7 +302,7 @@ export const LessonPopupModal: React.FC<LessonPopupModalProps> = ({
             SCHEMA_LIMITS.TITLE_MAX,
             'Material PDF'
           ),
-          url: sanitizeString(chunkedUrl, SCHEMA_LIMITS.PDF_URL_MAX, ''),
+          url: sanitizeString(finalUrl, SCHEMA_LIMITS.PDF_URL_MAX, ''),
           sizeLabel: sanitizeString(p.sizeLabel, 40, 'PDF'),
         });
       }

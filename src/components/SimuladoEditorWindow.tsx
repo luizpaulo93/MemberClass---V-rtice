@@ -19,7 +19,10 @@ import {
   sanitizeString,
   generateSafeId,
 } from '../types';
-import { uploadPdfFileToCloud } from '../utils/pdfStorage';
+import {
+  runWithConcurrency,
+  uploadPdfFileToCloud,
+} from '../utils/pdfStorage';
 
 interface SimuladoEditorWindowProps {
   editingSimulado: Simulado | null;
@@ -145,27 +148,71 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
   };
 
   const handleUploadPdf = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0) return;
+    const filesToUpload = Array.from(fileList);
+    e.target.value = '';
     setIsUploadingPdf(true);
-    setPdfUploadProgress(5);
+    setPdfUploadProgress(1);
     setPdfUploadError(null);
+
+    const progressByFile = new Array<number>(filesToUpload.length).fill(0);
+    const resultsByIndex = new Array<{
+      pdfUrl: string;
+      pdfTitle: string;
+      sizeLabel: string;
+    } | null>(filesToUpload.length).fill(null);
+    const failedNames: string[] = [];
+
+    const updateOverallProgress = () => {
+      const sum = progressByFile.reduce((acc, val) => acc + val, 0);
+      const avg = Math.round(sum / filesToUpload.length);
+      setPdfUploadProgress(Math.max(1, Math.min(100, avg)));
+    };
+
     try {
-      const uploaded = await uploadPdfFileToCloud(
-        file,
-        currentUserUid,
-        (pct) => setPdfUploadProgress(pct)
+      await runWithConcurrency(filesToUpload, 3, async (file, index) => {
+        try {
+          const uploaded = await uploadPdfFileToCloud(
+            file,
+            currentUserUid,
+            (pct) => {
+              progressByFile[index] = pct;
+              updateOverallProgress();
+            }
+          );
+          progressByFile[index] = 100;
+          updateOverallProgress();
+          resultsByIndex[index] = uploaded;
+        } catch (err) {
+          console.error(`Erro ao subir PDF do simulado "${file.name}":`, err);
+          progressByFile[index] = 100;
+          updateOverallProgress();
+          failedNames.push(file.name);
+        }
+      });
+
+      const validUploaded = resultsByIndex.filter(
+        (
+          item
+        ): item is { pdfUrl: string; pdfTitle: string; sizeLabel: string } =>
+          item !== null
       );
-      setPdfUrl(uploaded.pdfUrl);
-      setPdfTitle(uploaded.pdfTitle);
-      setPdfSizeLabel(uploaded.sizeLabel);
-    } catch (err) {
-      console.error('Erro ao subir PDF do simulado:', err);
-      setPdfUploadError('Não foi possível enviar este PDF. Tente novamente.');
+      if (validUploaded.length > 0) {
+        const chosen = validUploaded[validUploaded.length - 1];
+        setPdfUrl(chosen.pdfUrl);
+        setPdfTitle(chosen.pdfTitle);
+        setPdfSizeLabel(chosen.sizeLabel);
+      }
+
+      if (failedNames.length > 0) {
+        setPdfUploadError(
+          `${failedNames.length} arquivo(s) não puderam ser enviados: ${failedNames.join(', ')}`
+        );
+      }
     } finally {
       setIsUploadingPdf(false);
       setPdfUploadProgress(0);
-      e.target.value = '';
     }
   };
 
