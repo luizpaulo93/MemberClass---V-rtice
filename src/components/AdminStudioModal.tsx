@@ -11,7 +11,8 @@ import {
   Video,
   Sliders,
   ArrowLeft,
-  GripVertical,
+  ArrowUp,
+  ArrowDown,
   X,
   GraduationCap,
   ArrowRightLeft,
@@ -110,6 +111,10 @@ interface AdminWorkspaceProps {
   onDeleteStudent: (studentId: string) => Promise<void>;
   onSaveConfig: (config: Omit<PlatformConfig, 'updatedAt'>) => Promise<void>;
   onOpenCalendar?: () => void;
+  onReorderLessonFolders?: (orderedFolderIds: string[]) => Promise<void>;
+  onReorderLessons?: (orderedLessonIds: string[]) => Promise<void>;
+  onReorderPlaylists?: (orderedPlaylistIds: string[]) => Promise<void>;
+  onReorderCourses?: (orderedCourseIds: string[]) => Promise<void>;
   currentUserUid: string;
 }
 
@@ -245,9 +250,6 @@ const SortableSelectionBox: React.FC<SortableSelectionBoxProps> = ({
   onChangeSelectedIds,
   maxItems,
 }) => {
-  const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
-  const draggingIdxRef = useRef<number | null>(null);
-
   const unselectedItems = allItems.filter((item) => !selectedIds.includes(item.id));
   const selectedItems = selectedIds
     .map((id) => allItems.find((item) => item.id === id))
@@ -262,56 +264,14 @@ const SortableSelectionBox: React.FC<SortableSelectionBoxProps> = ({
     onChangeSelectedIds(selectedIds.filter((item) => item !== id));
   };
 
-  const reorderIndices = (fromIndex: number, toIndex: number) => {
-    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return;
-    if (fromIndex >= selectedIds.length || toIndex >= selectedIds.length) return;
-    const copy = [...selectedIds];
-    const [moved] = copy.splice(fromIndex, 1);
-    copy.splice(toIndex, 0, moved);
-    onChangeSelectedIds(copy);
-  };
-
-  const handleDragStart = (idx: number) => {
-    setDraggingIdx(idx);
-    draggingIdxRef.current = idx;
-  };
-
-  const handleDragEnter = (targetIdx: number) => {
-    const currentIdx = draggingIdxRef.current;
-    if (currentIdx === null || currentIdx === targetIdx) return;
-    reorderIndices(currentIdx, targetIdx);
-    draggingIdxRef.current = targetIdx;
-    setDraggingIdx(targetIdx);
-  };
-
-  const handleDragEnd = () => {
-    setDraggingIdx(null);
-    draggingIdxRef.current = null;
-  };
-
-  const handleTouchStart = (idx: number) => {
-    setDraggingIdx(idx);
-    draggingIdxRef.current = idx;
-  };
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (draggingIdxRef.current === null) return;
-    const touch = e.touches[0];
-    if (!touch) return;
-    const el = document.elementFromPoint(touch.clientX, touch.clientY);
-    const row = el?.closest('[data-sort-idx]') as HTMLElement | null;
-    if (!row) return;
-    const targetIdx = Number(row.getAttribute('data-sort-idx'));
-    if (!Number.isNaN(targetIdx) && targetIdx !== draggingIdxRef.current) {
-      reorderIndices(draggingIdxRef.current, targetIdx);
-      draggingIdxRef.current = targetIdx;
-      setDraggingIdx(targetIdx);
-    }
-  };
-
-  const handleTouchEnd = () => {
-    setDraggingIdx(null);
-    draggingIdxRef.current = null;
+  const moveSelectedItem = (index: number, direction: 'up' | 'down') => {
+    const currentIds = selectedItems.map((i) => i.id);
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= currentIds.length) return;
+    const nextIds = [...currentIds];
+    const [moved] = nextIds.splice(index, 1);
+    nextIds.splice(targetIndex, 0, moved);
+    onChangeSelectedIds(nextIds);
   };
 
   return (
@@ -345,48 +305,52 @@ const SortableSelectionBox: React.FC<SortableSelectionBoxProps> = ({
 
         {selectedItems.length > 0 && (
           <div className="space-y-1.5">
-            {selectedItems.map((item, idx) => {
-              const isDragging = draggingIdx === idx;
-              return (
-                <div
-                  key={item.id}
-                  data-sort-idx={idx}
-                  draggable
-                  onDragStart={() => handleDragStart(idx)}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDragEnter={() => handleDragEnter(idx)}
-                  onDragEnd={handleDragEnd}
-                  onTouchStart={() => handleTouchStart(idx)}
-                  onTouchMove={handleTouchMove}
-                  onTouchEnd={handleTouchEnd}
-                  className={`flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg border text-xs select-none transition-all cursor-grab active:cursor-grabbing ${
-                    isDragging
-                      ? 'bg-brand/25 border-brand-soft text-ink scale-[1.01] shadow-card'
-                      : 'bg-brand/15 border-brand/40 text-ink'
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5 min-w-0 flex-1 touch-none">
-                    <GripVertical className="w-4 h-4 text-brand-accent shrink-0" />
-                    <span className="font-mono tabular-nums text-brand-accent shrink-0">
-                      {idx + 1}.
-                    </span>
-                    <span className="truncate font-medium">{item.title}</span>
-                  </div>
+            {selectedItems.map((item, idx) => (
+              <div
+                key={item.id}
+                className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg border text-xs bg-brand/15 border-brand/40 text-ink transition-all"
+              >
+                <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                  <span className="font-mono tabular-nums text-brand-accent shrink-0">
+                    {idx + 1}.
+                  </span>
+                  <span className="truncate font-medium">{item.title}</span>
+                </div>
 
+                <div className="flex items-center gap-1 shrink-0">
+                  {selectedItems.length > 1 && (
+                    <>
+                      <button
+                        type="button"
+                        disabled={idx === 0}
+                        onClick={() => moveSelectedItem(idx, 'up')}
+                        className="p-1 rounded hover:bg-chip-hover text-ink-2 hover:text-ink disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                        title="Subir"
+                      >
+                        <ArrowUp className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={idx === selectedItems.length - 1}
+                        onClick={() => moveSelectedItem(idx, 'down')}
+                        className="p-1 rounded hover:bg-chip-hover text-ink-2 hover:text-ink disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                        title="Descer"
+                      >
+                        <ArrowDown className="w-3.5 h-3.5" />
+                      </button>
+                    </>
+                  )}
                   <button
                     type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      removeItem(item.id);
-                    }}
+                    onClick={() => removeItem(item.id)}
                     className="p-1 rounded hover:bg-chip-hover text-ink-2 hover:text-rose-500 transition-colors shrink-0 cursor-pointer"
                     title="Remover"
                   >
                     <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
-              );
-            })}
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -411,8 +375,6 @@ const FolderLessonPickerManager: React.FC<FolderLessonPickerManagerProps> = ({
   onChangeSelectedIds,
   maxItems,
 }) => {
-  const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
-  const draggingIdxRef = useRef<number | null>(null);
   const [isAddPopupOpen, setIsAddPopupOpen] = useState(false);
   const [popupFolderId, setPopupFolderId] = useState<string | null>(null);
 
@@ -446,56 +408,14 @@ const FolderLessonPickerManager: React.FC<FolderLessonPickerManagerProps> = ({
     onChangeSelectedIds(selectedIds.filter((item) => item !== id));
   };
 
-  const reorderIndices = (fromIndex: number, toIndex: number) => {
-    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return;
-    if (fromIndex >= selectedIds.length || toIndex >= selectedIds.length) return;
-    const copy = [...selectedIds];
-    const [moved] = copy.splice(fromIndex, 1);
-    copy.splice(toIndex, 0, moved);
-    onChangeSelectedIds(copy);
-  };
-
-  const handleDragStart = (idx: number) => {
-    setDraggingIdx(idx);
-    draggingIdxRef.current = idx;
-  };
-
-  const handleDragEnter = (targetIdx: number) => {
-    const currentIdx = draggingIdxRef.current;
-    if (currentIdx === null || currentIdx === targetIdx) return;
-    reorderIndices(currentIdx, targetIdx);
-    draggingIdxRef.current = targetIdx;
-    setDraggingIdx(targetIdx);
-  };
-
-  const handleDragEnd = () => {
-    setDraggingIdx(null);
-    draggingIdxRef.current = null;
-  };
-
-  const handleTouchStart = (idx: number) => {
-    setDraggingIdx(idx);
-    draggingIdxRef.current = idx;
-  };
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (draggingIdxRef.current === null) return;
-    const touch = e.touches[0];
-    if (!touch) return;
-    const el = document.elementFromPoint(touch.clientX, touch.clientY);
-    const row = el?.closest('[data-pl-sort-idx]') as HTMLElement | null;
-    if (!row) return;
-    const targetIdx = Number(row.getAttribute('data-pl-sort-idx'));
-    if (!Number.isNaN(targetIdx) && targetIdx !== draggingIdxRef.current) {
-      reorderIndices(draggingIdxRef.current, targetIdx);
-      draggingIdxRef.current = targetIdx;
-      setDraggingIdx(targetIdx);
-    }
-  };
-
-  const handleTouchEnd = () => {
-    setDraggingIdx(null);
-    draggingIdxRef.current = null;
+  const moveSelectedLesson = (index: number, direction: 'up' | 'down') => {
+    const currentIds = selectedLessons.map((l) => l.id);
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= currentIds.length) return;
+    const nextIds = [...currentIds];
+    const [moved] = nextIds.splice(index, 1);
+    nextIds.splice(targetIndex, 0, moved);
+    onChangeSelectedIds(nextIds);
   };
 
   const activePopupFolderName =
@@ -533,48 +453,52 @@ const FolderLessonPickerManager: React.FC<FolderLessonPickerManagerProps> = ({
         </p>
       ) : (
         <div className="space-y-2">
-          {selectedLessons.map((lesson, idx) => {
-            const isDragging = draggingIdx === idx;
-            return (
-              <div
-                key={lesson.id}
-                data-pl-sort-idx={idx}
-                draggable
-                onDragStart={() => handleDragStart(idx)}
-                onDragOver={(e) => e.preventDefault()}
-                onDragEnter={() => handleDragEnter(idx)}
-                onDragEnd={handleDragEnd}
-                onTouchStart={() => handleTouchStart(idx)}
-                onTouchMove={handleTouchMove}
-                onTouchEnd={handleTouchEnd}
-                className={`flex items-center justify-between gap-2 px-3.5 py-3 rounded-xl border text-xs select-none transition-all cursor-grab active:cursor-grabbing ${
-                  isDragging
-                    ? 'bg-brand/25 border-brand-soft text-ink scale-[1.01] shadow-card'
-                    : 'bg-surface-2 border-brand/40 text-ink'
-                }`}
-              >
-                <div className="flex items-center gap-2.5 min-w-0 flex-1 touch-none">
-                  <GripVertical className="w-4 h-4 text-brand-accent shrink-0" />
-                  <span className="font-mono tabular-nums text-brand-accent shrink-0">
-                    {idx + 1}.
-                  </span>
-                  <span className="truncate font-medium">{lesson.title}</span>
-                </div>
+          {selectedLessons.map((lesson, idx) => (
+            <div
+              key={lesson.id}
+              className="flex items-center justify-between gap-2 px-3.5 py-3 rounded-xl border text-xs bg-surface-2 border-brand/40 text-ink transition-all"
+            >
+              <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                <span className="font-mono tabular-nums text-brand-accent shrink-0">
+                  {idx + 1}.
+                </span>
+                <span className="truncate font-medium">{lesson.title}</span>
+              </div>
 
+              <div className="flex items-center gap-1 shrink-0">
+                {selectedLessons.length > 1 && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={idx === 0}
+                      onClick={() => moveSelectedLesson(idx, 'up')}
+                      className="p-1 rounded-lg hover:bg-chip-hover text-ink-2 hover:text-ink disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                      title="Subir aula"
+                    >
+                      <ArrowUp className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={idx === selectedLessons.length - 1}
+                      onClick={() => moveSelectedLesson(idx, 'down')}
+                      className="p-1 rounded-lg hover:bg-chip-hover text-ink-2 hover:text-ink disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                      title="Descer aula"
+                    >
+                      <ArrowDown className="w-4 h-4" />
+                    </button>
+                  </>
+                )}
                 <button
                   type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    removeLesson(lesson.id);
-                  }}
+                  onClick={() => removeLesson(lesson.id)}
                   className="p-1 rounded-lg hover:bg-chip-hover text-ink-2 hover:text-rose-500 transition-colors shrink-0 cursor-pointer"
                   title="Remover da playlist"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
-            );
-          })}
+            </div>
+          ))}
         </div>
       )}
 
@@ -738,6 +662,10 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
   onDeleteStudent,
   onSaveConfig,
   onOpenCalendar,
+  onReorderLessonFolders,
+  onReorderLessons,
+  onReorderPlaylists,
+  onReorderCourses,
   currentUserUid,
 }) => {
   const [activeTab, setActiveTab] = useState<AdminTab>('lessons');
@@ -764,6 +692,9 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
   const unassignedLessons = lessons.filter(
     (l) => !l.folderId || !validFolderIdSet.has(l.folderId)
   );
+  const activeFolderLessons = selectedLessonFolderId
+    ? lessons.filter((l) => l.folderId === selectedLessonFolderId)
+    : [];
 
   const regularPlaylists = playlists
     .filter((p) => p.id !== FREE_PLAYLIST_ID)
@@ -782,6 +713,21 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
     }));
   const freeCourse = courses.find((c) => c.id === FREE_COURSE_ID);
   const freePlaylist = playlists.find((p) => p.id === FREE_PLAYLIST_ID);
+
+  const moveItemByIndex = <T extends { id: string }>(
+    list: T[],
+    index: number,
+    direction: 'up' | 'down',
+    cb?: (orderedIds: string[]) => void | Promise<void>
+  ) => {
+    if (!cb) return;
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= list.length) return;
+    const next = [...list];
+    const [moved] = next.splice(index, 1);
+    next.splice(targetIndex, 0, moved);
+    void cb(next.map((item) => item.id));
+  };
 
   const resolvedFreeLessonIds = (
     freePlaylist
@@ -1010,6 +956,9 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
             'preset:trophy'
           ),
           lessonIds: validIds,
+          ...(typeof existingPl?.order === 'number'
+            ? { order: existingPl.order }
+            : {}),
           isPublished: true,
           authorId: currentUserUid,
         },
@@ -1089,6 +1038,9 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
           ),
           bannerUrl: existingCourse?.bannerUrl || '',
           playlistIds: validPlIds,
+          ...(typeof existingCourse?.order === 'number'
+            ? { order: existingCourse.order }
+            : {}),
           featured: existingCourse?.featured ?? true,
           isPublished: true,
           authorId: currentUserUid,
@@ -1939,7 +1891,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
 
                 {lessonFolders.length > 0 && (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-                    {lessonFolders.map((folder) => {
+                    {lessonFolders.map((folder, idx) => {
                       const folderLessonCount = lessons.filter(
                         (l) => l.folderId === folder.id
                       ).length;
@@ -1963,6 +1915,9 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                                       120,
                                       folder.name
                                     ),
+                                    ...(typeof folder.order === 'number'
+                                      ? { order: folder.order }
+                                      : {}),
                                     isPublished: true,
                                     authorId: folder.authorId || currentUserUid,
                                   },
@@ -2014,7 +1969,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                             setSelectedLessonFolderId(folder.id);
                             setSelectedMoveLessonIds([]);
                           }}
-                          className="flex items-center justify-between gap-3 p-4 rounded-2xl bg-surface border border-line hover:border-brand-soft/60 shadow-card transition-colors cursor-pointer"
+                          className="flex items-center justify-between gap-3 p-4 rounded-2xl bg-surface border border-line hover:border-brand-soft/60 shadow-card transition-all cursor-pointer"
                         >
                           <div className="flex items-center gap-3.5 min-w-0">
                             <div className="w-10 h-10 rounded-xl bg-brand/15 text-brand-accent flex items-center justify-center shrink-0">
@@ -2031,11 +1986,49 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-1 shrink-0">
+                          <div
+                            className="flex items-center gap-1 shrink-0"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {lessonFolders.length > 1 && (
+                              <>
+                                <button
+                                  type="button"
+                                  disabled={idx === 0}
+                                  onClick={() =>
+                                    moveItemByIndex(
+                                      lessonFolders,
+                                      idx,
+                                      'up',
+                                      onReorderLessonFolders
+                                    )
+                                  }
+                                  className="p-1.5 rounded-lg text-ink-2 hover:text-ink hover:bg-chip-hover disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                                  title="Subir pasta"
+                                >
+                                  <ArrowUp className="w-4 h-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={idx === lessonFolders.length - 1}
+                                  onClick={() =>
+                                    moveItemByIndex(
+                                      lessonFolders,
+                                      idx,
+                                      'down',
+                                      onReorderLessonFolders
+                                    )
+                                  }
+                                  className="p-1.5 rounded-lg text-ink-2 hover:text-ink hover:bg-chip-hover disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                                  title="Descer pasta"
+                                >
+                                  <ArrowDown className="w-4 h-4" />
+                                </button>
+                              </>
+                            )}
                             <button
                               type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
+                              onClick={() => {
                                 setEditingFolderId(folder.id);
                                 setEditingFolderName(folder.name);
                               }}
@@ -2046,10 +2039,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                             </button>
                             <button
                               type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onDeleteLessonFolder(folder.id);
-                              }}
+                              onClick={() => onDeleteLessonFolder(folder.id)}
                               className="p-2 rounded-lg text-ink-muted hover:text-rose-500 hover:bg-rose-500/10 transition-colors cursor-pointer"
                               title="Excluir pasta"
                             >
@@ -2126,7 +2116,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                     ) : (
                       unassignedLessons.length > 0 && (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-                          {unassignedLessons.map((lesson) => {
+                          {unassignedLessons.map((lesson, idx) => {
                             const isSelected = selectedMoveLessonIds.includes(
                               lesson.id
                             );
@@ -2140,7 +2130,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                                       : [...prev, lesson.id]
                                   );
                                 }}
-                                className={`cv-auto-row flex items-center gap-3 p-3.5 rounded-2xl border shadow-card transition-colors cursor-pointer ${
+                                className={`cv-auto-row flex items-center gap-3 p-3.5 rounded-2xl border shadow-card transition-all cursor-pointer ${
                                   isSelected
                                     ? 'bg-surface-2 border-brand-soft'
                                     : 'bg-surface border-line hover:border-line-strong'
@@ -2181,6 +2171,44 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                                   className="flex items-center gap-1 shrink-0"
                                   onClick={(e) => e.stopPropagation()}
                                 >
+                                  {unassignedLessons.length > 1 && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        disabled={idx === 0}
+                                        onClick={() =>
+                                          moveItemByIndex(
+                                            unassignedLessons,
+                                            idx,
+                                            'up',
+                                            onReorderLessons
+                                          )
+                                        }
+                                        className="p-1.5 rounded-lg text-ink-2 hover:text-ink hover:bg-chip-hover disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                                        title="Subir aula"
+                                      >
+                                        <ArrowUp className="w-4 h-4" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={
+                                          idx === unassignedLessons.length - 1
+                                        }
+                                        onClick={() =>
+                                          moveItemByIndex(
+                                            unassignedLessons,
+                                            idx,
+                                            'down',
+                                            onReorderLessons
+                                          )
+                                        }
+                                        className="p-1.5 rounded-lg text-ink-2 hover:text-ink hover:bg-chip-hover disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                                        title="Descer aula"
+                                      >
+                                        <ArrowDown className="w-4 h-4" />
+                                      </button>
+                                    </>
+                                  )}
                                   <button
                                     type="button"
                                     onClick={() => {
@@ -2313,7 +2341,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                     </p>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-                      {folderLessons.map((lesson) => {
+                      {folderLessons.map((lesson, idx) => {
                         const isSelected = selectedMoveLessonIds.includes(
                           lesson.id
                         );
@@ -2327,7 +2355,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                                   : [...prev, lesson.id]
                               );
                             }}
-                            className={`cv-auto-row flex items-center gap-3 p-3.5 rounded-2xl border shadow-card transition-colors cursor-pointer ${
+                            className={`cv-auto-row flex items-center gap-3 p-3.5 rounded-2xl border shadow-card transition-all cursor-pointer ${
                               isSelected
                                 ? 'bg-surface-2 border-brand-soft'
                                 : 'bg-surface border-line hover:border-line-strong'
@@ -2368,6 +2396,42 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                               className="flex items-center gap-1 shrink-0"
                               onClick={(e) => e.stopPropagation()}
                             >
+                              {folderLessons.length > 1 && (
+                                <>
+                                  <button
+                                    type="button"
+                                    disabled={idx === 0}
+                                    onClick={() =>
+                                      moveItemByIndex(
+                                        folderLessons,
+                                        idx,
+                                        'up',
+                                        onReorderLessons
+                                      )
+                                    }
+                                    className="p-1.5 rounded-lg text-ink-2 hover:text-ink hover:bg-chip-hover disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                                    title="Subir aula"
+                                  >
+                                    <ArrowUp className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={idx === folderLessons.length - 1}
+                                    onClick={() =>
+                                      moveItemByIndex(
+                                        folderLessons,
+                                        idx,
+                                        'down',
+                                        onReorderLessons
+                                      )
+                                    }
+                                    className="p-1.5 rounded-lg text-ink-2 hover:text-ink hover:bg-chip-hover disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                                    title="Descer aula"
+                                  >
+                                    <ArrowDown className="w-4 h-4" />
+                                  </button>
+                                </>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => {
@@ -2618,10 +2682,10 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-                {regularPlaylists.map((pl) => (
+                {regularPlaylists.map((pl, idx) => (
                   <div
                     key={pl.id}
-                    className="cv-auto-row flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-surface border border-line shadow-card"
+                    className="cv-auto-row flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-surface border border-line shadow-card transition-all"
                   >
                     <div className="flex items-center gap-3.5 min-w-0">
                       <div className="w-14 aspect-[3/4] rounded-xl overflow-hidden shrink-0 border border-line">
@@ -2643,6 +2707,42 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                     </div>
 
                     <div className="flex items-center gap-1 shrink-0">
+                      {regularPlaylists.length > 1 && (
+                        <>
+                          <button
+                            type="button"
+                            disabled={idx === 0}
+                            onClick={() =>
+                              moveItemByIndex(
+                                regularPlaylists,
+                                idx,
+                                'up',
+                                onReorderPlaylists
+                              )
+                            }
+                            className="p-1.5 rounded-lg text-ink-2 hover:text-ink hover:bg-chip-hover disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                            title="Subir playlist"
+                          >
+                            <ArrowUp className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={idx === regularPlaylists.length - 1}
+                            onClick={() =>
+                              moveItemByIndex(
+                                regularPlaylists,
+                                idx,
+                                'down',
+                                onReorderPlaylists
+                              )
+                            }
+                            className="p-1.5 rounded-lg text-ink-2 hover:text-ink hover:bg-chip-hover disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                            title="Descer playlist"
+                          >
+                            <ArrowDown className="w-4 h-4" />
+                          </button>
+                        </>
+                      )}
                       <button
                         type="button"
                         onClick={() => openEditPlaylistWindow(pl)}
@@ -2800,10 +2900,10 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                   </button>
                 </div>
 
-                {regularCourses.map((course) => (
+                {regularCourses.map((course, idx) => (
                   <div
                     key={course.id}
-                    className="cv-auto-row flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-surface border border-line shadow-card"
+                    className="cv-auto-row flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-surface border border-line shadow-card transition-all"
                   >
                     <div className="flex items-center gap-3.5 min-w-0">
                       <div className="w-14 aspect-[2/3] rounded-xl overflow-hidden shrink-0 border border-line">
@@ -2825,6 +2925,42 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                     </div>
 
                     <div className="flex items-center gap-1 shrink-0">
+                      {regularCourses.length > 1 && (
+                        <>
+                          <button
+                            type="button"
+                            disabled={idx === 0}
+                            onClick={() =>
+                              moveItemByIndex(
+                                regularCourses,
+                                idx,
+                                'up',
+                                onReorderCourses
+                              )
+                            }
+                            className="p-1.5 rounded-lg text-ink-2 hover:text-ink hover:bg-chip-hover disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                            title="Subir curso"
+                          >
+                            <ArrowUp className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={idx === regularCourses.length - 1}
+                            onClick={() =>
+                              moveItemByIndex(
+                                regularCourses,
+                                idx,
+                                'down',
+                                onReorderCourses
+                              )
+                            }
+                            className="p-1.5 rounded-lg text-ink-2 hover:text-ink hover:bg-chip-hover disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                            title="Descer curso"
+                          >
+                            <ArrowDown className="w-4 h-4" />
+                          </button>
+                        </>
+                      )}
                       <button
                         type="button"
                         onClick={() => openEditCourseWindow(course)}

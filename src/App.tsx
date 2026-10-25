@@ -19,6 +19,7 @@ import {
   query,
   serverTimestamp,
   setDoc,
+  Timestamp,
   updateDoc,
   where,
 } from 'firebase/firestore';
@@ -37,6 +38,8 @@ import {
   Sliders,
   ArrowLeft,
   ArrowRight,
+  ArrowUp,
+  ArrowDown,
   Download,
   Lock,
   User as UserIcon,
@@ -78,13 +81,16 @@ import {
   formatBirthDateInput,
   formatBirthDateDisplay,
   hasLessonVideo,
+  SCHEMA_LIMITS,
   FREE_COURSE_ID,
   FREE_PLAYLIST_ID,
+  sortByOrder,
 } from './types';
 import { CoverArtwork } from './components/CoverArtwork';
 import { StealthVideoPlayer } from './components/StealthVideoPlayer';
 import { VerticeLogo } from './components/VerticeLogo';
 import {
+  ensurePdfUrlChunked,
   triggerPdfDownload,
   setStudentPdfWatermarkInfo,
   updatePdfChunksIsFree,
@@ -142,15 +148,26 @@ const LazyComponentFallback = () => (
 interface ClassroomLessonRowProps {
   lesson: Lesson;
   idx: number;
+  totalCount: number;
   isCurrent: boolean;
   isDone: boolean;
+  canReorder?: boolean;
   onSelect: (lessonId: string) => void;
+  onMove?: (index: number, direction: 'up' | 'down') => void;
 }
 
 const ClassroomLessonRow = React.memo<ClassroomLessonRowProps>(
-  ({ lesson, idx, isCurrent, isDone, onSelect }) => (
-    <button
-      type="button"
+  ({
+    lesson,
+    idx,
+    totalCount,
+    isCurrent,
+    isDone,
+    canReorder = false,
+    onSelect,
+    onMove,
+  }) => (
+    <div
       onClick={() => onSelect(lesson.id)}
       className={`cv-auto-row w-full flex items-center justify-between gap-2.5 p-2.5 rounded-xl text-left transition-all cursor-pointer ${
         isCurrent
@@ -183,10 +200,41 @@ const ClassroomLessonRow = React.memo<ClassroomLessonRowProps>(
         </p>
       </div>
 
-      {isCurrent && (
-        <Play className="w-3.5 h-3.5 text-white fill-current shrink-0" />
-      )}
-    </button>
+      <div
+        className="flex items-center gap-1 shrink-0"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {canReorder && totalCount > 1 && onMove && (
+          <>
+            <button
+              type="button"
+              disabled={idx === 0}
+              onClick={() => onMove(idx, 'up')}
+              className={`p-1 rounded hover:bg-black/15 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer ${
+                isCurrent ? 'text-white' : 'text-ink-2 hover:text-ink'
+              }`}
+              title="Subir aula"
+            >
+              <ArrowUp className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              disabled={idx === totalCount - 1}
+              onClick={() => onMove(idx, 'down')}
+              className={`p-1 rounded hover:bg-black/15 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer ${
+                isCurrent ? 'text-white' : 'text-ink-2 hover:text-ink'
+              }`}
+              title="Descer aula"
+            >
+              <ArrowDown className="w-3.5 h-3.5" />
+            </button>
+          </>
+        )}
+        {isCurrent && (
+          <Play className="w-3.5 h-3.5 text-white fill-current shrink-0 ml-0.5" />
+        )}
+      </div>
+    </div>
   )
 );
 
@@ -523,17 +571,17 @@ export default function App() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   // Firestore Collections State
-  const [lessons, setLessons] = useState<Lesson[]>(
-    () => initialBootCache?.lessons || []
+  const [lessons, setLessons] = useState<Lesson[]>(() =>
+    sortByOrder(initialBootCache?.lessons || [])
   );
-  const [lessonFolders, setLessonFolders] = useState<LessonFolder[]>(
-    () => initialBootCache?.lessonFolders || []
+  const [lessonFolders, setLessonFolders] = useState<LessonFolder[]>(() =>
+    sortByOrder(initialBootCache?.lessonFolders || [])
   );
-  const [playlists, setPlaylists] = useState<Playlist[]>(
-    () => initialBootCache?.playlists || []
+  const [playlists, setPlaylists] = useState<Playlist[]>(() =>
+    sortByOrder(initialBootCache?.playlists || [])
   );
-  const [courses, setCourses] = useState<Course[]>(
-    () => initialBootCache?.courses || []
+  const [courses, setCourses] = useState<Course[]>(() =>
+    sortByOrder(initialBootCache?.courses || [])
   );
   const [turmas, setTurmas] = useState<Turma[]>(
     () => initialBootCache?.turmas || []
@@ -1228,10 +1276,12 @@ export default function App() {
     const unsubCourses = onSnapshot(
       coursesQuery,
       (snap) => {
-        const list = snap.docs.map((d) => ({
-          ...(d.data() as Omit<Course, 'id'>),
-          id: d.id,
-        }));
+        const list = sortByOrder(
+          snap.docs.map((d) => ({
+            ...(d.data() as Omit<Course, 'id'>),
+            id: d.id,
+          }))
+        );
         setCourses(list);
         setCoursesLoaded(true);
         saveFastBootCache({ courses: list });
@@ -1249,10 +1299,12 @@ export default function App() {
     const unsubPlaylists = onSnapshot(
       playlistsQuery,
       (snap) => {
-        const list = snap.docs.map((d) => ({
-          ...(d.data() as Omit<Playlist, 'id'>),
-          id: d.id,
-        }));
+        const list = sortByOrder(
+          snap.docs.map((d) => ({
+            ...(d.data() as Omit<Playlist, 'id'>),
+            id: d.id,
+          }))
+        );
         setPlaylists(list);
         setPlaylistsLoaded(true);
         saveFastBootCache({ playlists: list });
@@ -1270,10 +1322,12 @@ export default function App() {
     const unsubLessonFolders = onSnapshot(
       lessonFoldersQuery,
       (snap) => {
-        const list = snap.docs.map((d) => ({
-          ...(d.data() as Omit<LessonFolder, 'id'>),
-          id: d.id,
-        }));
+        const list = sortByOrder(
+          snap.docs.map((d) => ({
+            ...(d.data() as Omit<LessonFolder, 'id'>),
+            id: d.id,
+          }))
+        );
         setLessonFolders(list);
         saveFastBootCache({ lessonFolders: list });
       },
@@ -1468,10 +1522,12 @@ export default function App() {
     const unsubLessons = onSnapshot(
       lessonsQuery,
       (snap) => {
-        const list = snap.docs.map((d) => ({
-          ...(d.data() as Omit<Lesson, 'id'>),
-          id: d.id,
-        }));
+        const list = sortByOrder(
+          snap.docs.map((d) => ({
+            ...(d.data() as Omit<Lesson, 'id'>),
+            id: d.id,
+          }))
+        );
         setLessons(list);
         setLessonsLoaded(true);
         saveFastBootCache({ lessons: list });
@@ -1645,41 +1701,133 @@ export default function App() {
   };
 
   // --- ADMIN CRUD OPERATIONS ---
+  const toFirestoreTimestamp = (val: unknown) => {
+    if (val instanceof Timestamp) return val;
+    if (
+      val &&
+      typeof val === 'object' &&
+      'seconds' in val &&
+      typeof (val as { seconds: unknown }).seconds === 'number'
+    ) {
+      const s = (val as { seconds: number }).seconds;
+      const ns =
+        'nanoseconds' in val &&
+        typeof (val as { nanoseconds: unknown }).nanoseconds === 'number'
+          ? (val as { nanoseconds: number }).nanoseconds
+          : 0;
+      return new Timestamp(s, ns);
+    }
+    return serverTimestamp();
+  };
+
+  const normalizeLessonPdfsForSave = async (
+    rawPdfs: PdfAttachment[] | undefined,
+    fallbackPdfs: PdfAttachment[] | undefined,
+    authorId: string,
+    isFree: boolean
+  ): Promise<PdfAttachment[]> => {
+    const list = Array.isArray(rawPdfs) ? rawPdfs : [];
+    const fallbackById = new Map(
+      (Array.isArray(fallbackPdfs) ? fallbackPdfs : []).map((p) => [p.id, p])
+    );
+    const result: PdfAttachment[] = [];
+
+    for (const item of list.slice(0, SCHEMA_LIMITS.MAX_PDFS)) {
+      if (!item) continue;
+      const rawUrl = (item.url || fallbackById.get(item.id)?.url || '').trim();
+      if (!rawUrl) continue;
+      const chunkedUrl = await ensurePdfUrlChunked(rawUrl, authorId, isFree);
+      if (!chunkedUrl) continue;
+
+      result.push({
+        id: sanitizeString(
+          item.id || generateSafeId('pdf'),
+          SCHEMA_LIMITS.ID_MAX,
+          generateSafeId('pdf')
+        ),
+        title: sanitizeString(
+          item.title,
+          SCHEMA_LIMITS.TITLE_MAX,
+          'Material PDF'
+        ),
+        url: sanitizeString(chunkedUrl, SCHEMA_LIMITS.PDF_URL_MAX, ''),
+        sizeLabel: sanitizeString(item.sizeLabel, 40, 'PDF'),
+      });
+    }
+
+    return result;
+  };
+
   const handleSaveLesson = async (
     lessonData: Omit<Lesson, 'createdAt' | 'updatedAt'>,
     isNew: boolean
   ) => {
-    if (!user) return;
+    const activeUid = auth.currentUser?.uid || user?.uid;
+    if (!activeUid) return;
     const { id, ...payload } = lessonData;
     const ref = doc(db, 'lessons', id);
     const existingLesson = lessons.find((l) => l.id === id);
 
     try {
+      const isLessonFree = Boolean(payload.isFree);
+      const cleanPdfs = await normalizeLessonPdfsForSave(
+        payload.pdfs,
+        existingLesson?.pdfs,
+        activeUid,
+        isLessonFree
+      );
+
+      const resolvedOrder =
+        typeof payload.order === 'number'
+          ? payload.order
+          : typeof existingLesson?.order === 'number'
+            ? existingLesson.order
+            : undefined;
+
       await setDoc(ref, {
-        title: payload.title,
-        description: payload.description || '',
-        youtubeId: payload.youtubeId,
-        duration: payload.duration || '15:00',
-        thumbnailUrl: payload.thumbnailUrl || '',
-        pdfs: payload.pdfs || [],
-        folderId: payload.folderId ?? existingLesson?.folderId ?? '',
-        isFree: Boolean(payload.isFree),
+        title: sanitizeString(payload.title, SCHEMA_LIMITS.TITLE_MAX, 'Aula'),
+        description: sanitizeString(
+          payload.description || '',
+          SCHEMA_LIMITS.LESSON_DESC_MAX,
+          ''
+        ),
+        youtubeId: payload.youtubeId || '',
+        duration: sanitizeString(payload.duration || '15:00', 20, '15:00'),
+        thumbnailUrl: sanitizeString(
+          payload.thumbnailUrl || 'preset:stadium',
+          SCHEMA_LIMITS.URL_MAX,
+          'preset:stadium'
+        ),
+        pdfs: cleanPdfs,
+        folderId: sanitizeString(
+          payload.folderId ?? existingLesson?.folderId ?? '',
+          128,
+          ''
+        ),
+        ...(typeof resolvedOrder === 'number' ? { order: resolvedOrder } : {}),
+        isFree: isLessonFree,
         isPublished: true,
-        authorId: existingLesson?.authorId || payload.authorId || user.uid,
-        createdAt: existingLesson?.createdAt || serverTimestamp(),
+        authorId: activeUid,
+        createdAt: isNew
+          ? serverTimestamp()
+          : toFirestoreTimestamp(existingLesson?.createdAt),
         updatedAt: serverTimestamp(),
       });
 
-      if (payload.pdfs && payload.pdfs.length > 0) {
-        for (const pdf of payload.pdfs) {
+      if (
+        existingLesson &&
+        Boolean(existingLesson.isFree) !== isLessonFree &&
+        cleanPdfs.length > 0
+      ) {
+        for (const pdf of cleanPdfs) {
           if (pdf.url && pdf.url.startsWith('chunked:')) {
-            await updatePdfChunksIsFree(pdf.url, Boolean(payload.isFree));
+            await updatePdfChunksIsFree(pdf.url, isLessonFree);
           }
         }
       }
 
       const existingFreePl = playlists.find((p) => p.id === FREE_PLAYLIST_ID);
-      if (payload.isFree) {
+      if (isLessonFree) {
         const nextFreeIds = existingFreePl
           ? Array.from(new Set([...existingFreePl.lessonIds, id]))
           : [id];
@@ -1689,9 +1837,14 @@ export default function App() {
           description: existingFreePl?.description || '',
           coverUrl: existingFreePl?.coverUrl || 'preset:mastery',
           lessonIds: nextFreeIds,
+          ...(typeof existingFreePl?.order === 'number'
+            ? { order: existingFreePl.order }
+            : {}),
           isPublished: true,
-          authorId: existingFreePl?.authorId || user.uid,
-          createdAt: existingFreePl?.createdAt || serverTimestamp(),
+          authorId: activeUid,
+          createdAt: existingFreePl
+            ? toFirestoreTimestamp(existingFreePl.createdAt)
+            : serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
       } else if (existingFreePl && existingFreePl.lessonIds.includes(id)) {
@@ -1703,9 +1856,12 @@ export default function App() {
           description: existingFreePl.description || '',
           coverUrl: existingFreePl.coverUrl || 'preset:mastery',
           lessonIds: nextFreeIds,
+          ...(typeof existingFreePl.order === 'number'
+            ? { order: existingFreePl.order }
+            : {}),
           isPublished: true,
-          authorId: existingFreePl.authorId || user.uid,
-          createdAt: existingFreePl.createdAt || serverTimestamp(),
+          authorId: activeUid,
+          createdAt: toFirestoreTimestamp(existingFreePl.createdAt),
           updatedAt: serverTimestamp(),
         });
       }
@@ -1719,6 +1875,7 @@ export default function App() {
   };
 
   const handleDeleteLesson = async (lessonId: string) => {
+    const activeUid = auth.currentUser?.uid || user?.uid;
     try {
       await deleteDoc(doc(db, 'lessons', lessonId));
       if (selectedLessonId === lessonId) {
@@ -1733,9 +1890,10 @@ export default function App() {
             description: pl.description || '',
             coverUrl: pl.coverUrl || 'preset:stadium',
             lessonIds: cleanedIds,
+            ...(typeof pl.order === 'number' ? { order: pl.order } : {}),
             isPublished: true,
-            authorId: pl.authorId || user?.uid || '',
-            createdAt: pl.createdAt || serverTimestamp(),
+            authorId: activeUid || pl.authorId || '',
+            createdAt: toFirestoreTimestamp(pl.createdAt),
             updatedAt: serverTimestamp(),
           });
         }
@@ -1749,17 +1907,27 @@ export default function App() {
     folderData: Omit<LessonFolder, 'createdAt' | 'updatedAt'>,
     isNew: boolean
   ) => {
-    if (!user) return;
+    const activeUid = auth.currentUser?.uid || user?.uid;
+    if (!activeUid) return;
     const { id, ...payload } = folderData;
     const ref = doc(db, 'lessonFolders', id);
     const existingFolder = lessonFolders.find((f) => f.id === id);
+    const resolvedOrder =
+      typeof payload.order === 'number'
+        ? payload.order
+        : typeof existingFolder?.order === 'number'
+          ? existingFolder.order
+          : undefined;
 
     try {
       await setDoc(ref, {
         name: sanitizeString(payload.name, 120, 'Pasta'),
+        ...(typeof resolvedOrder === 'number' ? { order: resolvedOrder } : {}),
         isPublished: true,
-        authorId: existingFolder?.authorId || payload.authorId || user.uid,
-        createdAt: existingFolder?.createdAt || serverTimestamp(),
+        authorId: activeUid,
+        createdAt: isNew
+          ? serverTimestamp()
+          : toFirestoreTimestamp(existingFolder?.createdAt),
         updatedAt: serverTimestamp(),
       });
     } catch (err) {
@@ -1772,7 +1940,8 @@ export default function App() {
   };
 
   const handleDeleteLessonFolder = async (folderId: string) => {
-    if (!user) return;
+    const activeUid = auth.currentUser?.uid || user?.uid;
+    if (!activeUid) return;
     try {
       await deleteDoc(doc(db, 'lessonFolders', folderId));
       const folderLessons = lessons.filter((l) => l.folderId === folderId);
@@ -1785,10 +1954,11 @@ export default function App() {
           thumbnailUrl: lesson.thumbnailUrl || '',
           pdfs: lesson.pdfs || [],
           folderId: '',
+          ...(typeof lesson.order === 'number' ? { order: lesson.order } : {}),
           isFree: Boolean(lesson.isFree),
           isPublished: true,
-          authorId: lesson.authorId || user.uid,
-          createdAt: lesson.createdAt || serverTimestamp(),
+          authorId: activeUid,
+          createdAt: toFirestoreTimestamp(lesson.createdAt),
           updatedAt: serverTimestamp(),
         });
       }
@@ -1805,7 +1975,8 @@ export default function App() {
     lessonIds: string[],
     targetFolderId: string
   ) => {
-    if (!user || lessonIds.length === 0) return;
+    const activeUid = auth.currentUser?.uid || user?.uid;
+    if (!activeUid || lessonIds.length === 0) return;
     const cleanTargetFolderId = sanitizeString(targetFolderId, 128, '');
     try {
       for (const lid of lessonIds) {
@@ -1819,10 +1990,11 @@ export default function App() {
           thumbnailUrl: lesson.thumbnailUrl || '',
           pdfs: lesson.pdfs || [],
           folderId: cleanTargetFolderId,
+          ...(typeof lesson.order === 'number' ? { order: lesson.order } : {}),
           isFree: Boolean(lesson.isFree),
           isPublished: true,
-          authorId: lesson.authorId || user.uid,
-          createdAt: lesson.createdAt || serverTimestamp(),
+          authorId: activeUid,
+          createdAt: toFirestoreTimestamp(lesson.createdAt),
           updatedAt: serverTimestamp(),
         });
       }
@@ -1835,7 +2007,8 @@ export default function App() {
     playlistData: Omit<Playlist, 'createdAt' | 'updatedAt'>,
     isNew: boolean
   ) => {
-    if (!user) return;
+    const activeUid = auth.currentUser?.uid || user?.uid;
+    if (!activeUid) return;
     const { id, ...payload } = playlistData;
     const ref = doc(db, 'playlists', id);
     const existingPl = playlists.find((p) => p.id === id);
@@ -1844,6 +2017,12 @@ export default function App() {
     const cleanLessonIds = payload.lessonIds.filter((lid) =>
       validLessonIds.has(lid)
     );
+    const resolvedOrder =
+      typeof payload.order === 'number'
+        ? payload.order
+        : typeof existingPl?.order === 'number'
+          ? existingPl.order
+          : undefined;
 
     try {
       await setDoc(ref, {
@@ -1851,9 +2030,12 @@ export default function App() {
         description: payload.description || '',
         coverUrl: payload.coverUrl || 'preset:stadium',
         lessonIds: cleanLessonIds,
+        ...(typeof resolvedOrder === 'number' ? { order: resolvedOrder } : {}),
         isPublished: true,
-        authorId: existingPl?.authorId || payload.authorId || user.uid,
-        createdAt: existingPl?.createdAt || serverTimestamp(),
+        authorId: activeUid,
+        createdAt: isNew
+          ? serverTimestamp()
+          : toFirestoreTimestamp(existingPl?.createdAt),
         updatedAt: serverTimestamp(),
       });
     } catch (err) {
@@ -1866,6 +2048,7 @@ export default function App() {
   };
 
   const handleDeletePlaylist = async (playlistId: string) => {
+    const activeUid = auth.currentUser?.uid || user?.uid;
     try {
       await deleteDoc(doc(db, 'playlists', playlistId));
       if (selectedPlaylistId === playlistId) {
@@ -1883,10 +2066,11 @@ export default function App() {
             coverUrl: c.coverUrl || 'preset:stadium',
             bannerUrl: c.bannerUrl || '',
             playlistIds: cleanedPlIds,
+            ...(typeof c.order === 'number' ? { order: c.order } : {}),
             featured: Boolean(c.featured),
             isPublished: true,
-            authorId: c.authorId || user?.uid || '',
-            createdAt: c.createdAt || serverTimestamp(),
+            authorId: activeUid || c.authorId || '',
+            createdAt: toFirestoreTimestamp(c.createdAt),
             updatedAt: serverTimestamp(),
           });
         }
@@ -1904,7 +2088,8 @@ export default function App() {
     courseData: Omit<Course, 'createdAt' | 'updatedAt'>,
     isNew: boolean
   ) => {
-    if (!user) return;
+    const activeUid = auth.currentUser?.uid || user?.uid;
+    if (!activeUid) return;
     const { id, ...payload } = courseData;
     const ref = doc(db, 'courses', id);
     const existingCourse = courses.find((c) => c.id === id);
@@ -1913,6 +2098,12 @@ export default function App() {
     const cleanPlaylistIds = payload.playlistIds.filter((pid) =>
       validPlaylistIds.has(pid)
     );
+    const resolvedOrder =
+      typeof payload.order === 'number'
+        ? payload.order
+        : typeof existingCourse?.order === 'number'
+          ? existingCourse.order
+          : undefined;
 
     try {
       await setDoc(ref, {
@@ -1923,10 +2114,13 @@ export default function App() {
         coverUrl: payload.coverUrl || 'preset:stadium',
         bannerUrl: payload.bannerUrl || '',
         playlistIds: cleanPlaylistIds,
+        ...(typeof resolvedOrder === 'number' ? { order: resolvedOrder } : {}),
         featured: Boolean(payload.featured),
         isPublished: true,
-        authorId: existingCourse?.authorId || payload.authorId || user.uid,
-        createdAt: existingCourse?.createdAt || serverTimestamp(),
+        authorId: activeUid,
+        createdAt: isNew
+          ? serverTimestamp()
+          : toFirestoreTimestamp(existingCourse?.createdAt),
         updatedAt: serverTimestamp(),
       });
     } catch (err) {
@@ -1946,6 +2140,308 @@ export default function App() {
       }
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, `courses/${courseId}`);
+    }
+  };
+
+  const handleReorderCourses = async (orderedCourseIds: string[]) => {
+    const activeUid = auth.currentUser?.uid || user?.uid;
+    if (!activeUid || !isAdmin || orderedCourseIds.length === 0) return;
+
+    const orderMap = new Map<string, number>();
+    orderedCourseIds.forEach((id, idx) => orderMap.set(id, idx));
+
+    const nextCourses = sortByOrder(
+      courses.map((c) =>
+        orderMap.has(c.id) ? { ...c, order: orderMap.get(c.id)! } : c
+      )
+    );
+    setCourses(nextCourses);
+    saveFastBootCache({ courses: nextCourses });
+
+    try {
+      await Promise.all(
+        orderedCourseIds.map(async (cid, idx) => {
+          const c = courses.find((item) => item.id === cid);
+          if (!c) return;
+          await setDoc(doc(db, 'courses', c.id), {
+            title: sanitizeString(c.title, SCHEMA_LIMITS.TITLE_MAX, 'Curso'),
+            subtitle: sanitizeString(c.subtitle || '', SCHEMA_LIMITS.SUBTITLE_MAX, ''),
+            description: sanitizeString(c.description || '', SCHEMA_LIMITS.DESCRIPTION_MAX, ''),
+            category: sanitizeString(c.category || 'Destaques', SCHEMA_LIMITS.CATEGORY_MAX, 'Destaques'),
+            coverUrl: sanitizeString(c.coverUrl || 'preset:stadium', SCHEMA_LIMITS.URL_MAX, 'preset:stadium'),
+            bannerUrl: sanitizeString(c.bannerUrl || '', SCHEMA_LIMITS.URL_MAX, ''),
+            playlistIds: c.playlistIds || [],
+            order: idx,
+            featured: Boolean(c.featured),
+            isPublished: true,
+            authorId: activeUid,
+            createdAt: toFirestoreTimestamp(c.createdAt),
+            updatedAt: serverTimestamp(),
+          });
+        })
+      );
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, 'courses');
+    }
+  };
+
+  const handleReorderPlaylists = async (orderedPlaylistIds: string[]) => {
+    const activeUid = auth.currentUser?.uid || user?.uid;
+    if (!activeUid || !isAdmin || orderedPlaylistIds.length === 0) return;
+
+    const orderMap = new Map<string, number>();
+    orderedPlaylistIds.forEach((id, idx) => orderMap.set(id, idx));
+
+    const nextPlaylists = sortByOrder(
+      playlists.map((p) =>
+        orderMap.has(p.id) ? { ...p, order: orderMap.get(p.id)! } : p
+      )
+    );
+    setPlaylists(nextPlaylists);
+    saveFastBootCache({ playlists: nextPlaylists });
+
+    try {
+      await Promise.all(
+        orderedPlaylistIds.map(async (pid, idx) => {
+          const pl = playlists.find((item) => item.id === pid);
+          if (!pl) return;
+          await setDoc(doc(db, 'playlists', pl.id), {
+            title: sanitizeString(pl.title, SCHEMA_LIMITS.TITLE_MAX, 'Playlist'),
+            description: sanitizeString(pl.description || '', SCHEMA_LIMITS.DESCRIPTION_MAX, ''),
+            coverUrl: sanitizeString(pl.coverUrl || 'preset:stadium', SCHEMA_LIMITS.URL_MAX, 'preset:stadium'),
+            lessonIds: pl.lessonIds || [],
+            order: idx,
+            isPublished: true,
+            authorId: activeUid,
+            createdAt: toFirestoreTimestamp(pl.createdAt),
+            updatedAt: serverTimestamp(),
+          });
+        })
+      );
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, 'playlists');
+    }
+  };
+
+  const handleReorderCoursePlaylists = async (
+    courseId: string,
+    orderedPlaylistIds: string[]
+  ) => {
+    const activeUid = auth.currentUser?.uid || user?.uid;
+    if (!activeUid || !isAdmin || !courseId) return;
+    const targetCourse = courses.find((c) => c.id === courseId);
+    if (!targetCourse) return;
+
+    const nextCourses = courses.map((c) =>
+      c.id === courseId ? { ...c, playlistIds: orderedPlaylistIds } : c
+    );
+    setCourses(nextCourses);
+    saveFastBootCache({ courses: nextCourses });
+
+    try {
+      await setDoc(doc(db, 'courses', targetCourse.id), {
+        title: sanitizeString(targetCourse.title, SCHEMA_LIMITS.TITLE_MAX, 'Curso'),
+        subtitle: sanitizeString(targetCourse.subtitle || '', SCHEMA_LIMITS.SUBTITLE_MAX, ''),
+        description: sanitizeString(targetCourse.description || '', SCHEMA_LIMITS.DESCRIPTION_MAX, ''),
+        category: sanitizeString(targetCourse.category || 'Destaques', SCHEMA_LIMITS.CATEGORY_MAX, 'Destaques'),
+        coverUrl: sanitizeString(targetCourse.coverUrl || 'preset:stadium', SCHEMA_LIMITS.URL_MAX, 'preset:stadium'),
+        bannerUrl: sanitizeString(targetCourse.bannerUrl || '', SCHEMA_LIMITS.URL_MAX, ''),
+        playlistIds: orderedPlaylistIds,
+        ...(typeof targetCourse.order === 'number'
+          ? { order: targetCourse.order }
+          : {}),
+        featured: Boolean(targetCourse.featured),
+        isPublished: true,
+        authorId: activeUid,
+        createdAt: toFirestoreTimestamp(targetCourse.createdAt),
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `courses/${courseId}`);
+    }
+  };
+
+  const handleReorderLessonFolders = async (orderedFolderIds: string[]) => {
+    const activeUid = auth.currentUser?.uid || user?.uid;
+    if (!activeUid || !isAdmin || orderedFolderIds.length === 0) return;
+
+    const orderMap = new Map<string, number>();
+    orderedFolderIds.forEach((id, idx) => orderMap.set(id, idx));
+
+    const nextFolders = sortByOrder(
+      lessonFolders.map((f) =>
+        orderMap.has(f.id) ? { ...f, order: orderMap.get(f.id)! } : f
+      )
+    );
+    setLessonFolders(nextFolders);
+    saveFastBootCache({ lessonFolders: nextFolders });
+
+    try {
+      await Promise.all(
+        orderedFolderIds.map(async (fid, idx) => {
+          const folder = lessonFolders.find((item) => item.id === fid);
+          if (!folder) return;
+          await setDoc(doc(db, 'lessonFolders', folder.id), {
+            name: sanitizeString(folder.name, 120, 'Pasta'),
+            order: idx,
+            isPublished: true,
+            authorId: activeUid,
+            createdAt: toFirestoreTimestamp(folder.createdAt),
+            updatedAt: serverTimestamp(),
+          });
+        })
+      );
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, 'lessonFolders');
+    }
+  };
+
+  const handleReorderLessons = async (orderedLessonIds: string[]) => {
+    const activeUid = auth.currentUser?.uid || user?.uid;
+    if (!activeUid || !isAdmin || orderedLessonIds.length === 0) return;
+
+    const orderMap = new Map<string, number>();
+    orderedLessonIds.forEach((id, idx) => orderMap.set(id, idx));
+
+    const nextLessons = sortByOrder(
+      lessons.map((l) =>
+        orderMap.has(l.id) ? { ...l, order: orderMap.get(l.id)! } : l
+      )
+    );
+    setLessons(nextLessons);
+    saveFastBootCache({ lessons: nextLessons });
+
+    try {
+      await Promise.all(
+        orderedLessonIds.map(async (lid, idx) => {
+          const lesson = lessons.find((item) => item.id === lid);
+          if (!lesson) return;
+          await setDoc(doc(db, 'lessons', lesson.id), {
+            title: sanitizeString(lesson.title, SCHEMA_LIMITS.TITLE_MAX, 'Aula'),
+            description: sanitizeString(
+              lesson.description || '',
+              SCHEMA_LIMITS.LESSON_DESC_MAX,
+              ''
+            ),
+            youtubeId: lesson.youtubeId || '',
+            duration: sanitizeString(lesson.duration || '15:00', 20, '15:00'),
+            thumbnailUrl: sanitizeString(
+              lesson.thumbnailUrl || 'preset:stadium',
+              SCHEMA_LIMITS.URL_MAX,
+              'preset:stadium'
+            ),
+            pdfs: lesson.pdfs || [],
+            folderId: sanitizeString(lesson.folderId || '', 128, ''),
+            order: idx,
+            isFree: Boolean(lesson.isFree),
+            isPublished: true,
+            authorId: activeUid,
+            createdAt: toFirestoreTimestamp(lesson.createdAt),
+            updatedAt: serverTimestamp(),
+          });
+        })
+      );
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, 'lessons');
+    }
+  };
+
+  const handleReorderPlaylistLessons = async (
+    playlistId: string,
+    orderedLessonIds: string[]
+  ) => {
+    const activeUid = auth.currentUser?.uid || user?.uid;
+    if (!activeUid || !isAdmin || !playlistId) return;
+    const existingPl = playlists.find((p) => p.id === playlistId);
+
+    const nextPlaylists = playlists.map((p) =>
+      p.id === playlistId ? { ...p, lessonIds: orderedLessonIds } : p
+    );
+    setPlaylists(nextPlaylists);
+    saveFastBootCache({ playlists: nextPlaylists });
+
+    try {
+      await setDoc(doc(db, 'playlists', playlistId), {
+        title: sanitizeString(
+          existingPl?.title ||
+            (playlistId === FREE_PLAYLIST_ID ? 'Aulas Grátis' : 'Playlist'),
+          SCHEMA_LIMITS.TITLE_MAX,
+          'Playlist'
+        ),
+        description: sanitizeString(
+          existingPl?.description || '',
+          SCHEMA_LIMITS.DESCRIPTION_MAX,
+          ''
+        ),
+        coverUrl: sanitizeString(
+          existingPl?.coverUrl ||
+            (playlistId === FREE_PLAYLIST_ID ? 'preset:mastery' : 'preset:stadium'),
+          SCHEMA_LIMITS.URL_MAX,
+          'preset:stadium'
+        ),
+        lessonIds: orderedLessonIds,
+        ...(typeof existingPl?.order === 'number'
+          ? { order: existingPl.order }
+          : {}),
+        isPublished: true,
+        authorId: activeUid,
+        createdAt: existingPl
+          ? toFirestoreTimestamp(existingPl.createdAt)
+          : serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `playlists/${playlistId}`);
+    }
+  };
+
+  const handleReorderLessonPdfs = async (
+    lessonId: string,
+    orderedPdfs: PdfAttachment[]
+  ) => {
+    const activeUid = auth.currentUser?.uid || user?.uid;
+    if (!activeUid || !isAdmin || !lessonId) return;
+    const targetLesson = lessons.find((l) => l.id === lessonId);
+    if (!targetLesson) return;
+
+    const nextLessons = lessons.map((l) =>
+      l.id === lessonId ? { ...l, pdfs: orderedPdfs } : l
+    );
+    setLessons(nextLessons);
+    saveFastBootCache({ lessons: nextLessons });
+
+    try {
+      await setDoc(doc(db, 'lessons', targetLesson.id), {
+        title: sanitizeString(
+          targetLesson.title,
+          SCHEMA_LIMITS.TITLE_MAX,
+          'Aula'
+        ),
+        description: sanitizeString(
+          targetLesson.description || '',
+          SCHEMA_LIMITS.LESSON_DESC_MAX,
+          ''
+        ),
+        youtubeId: targetLesson.youtubeId || '',
+        duration: sanitizeString(targetLesson.duration || '15:00', 20, '15:00'),
+        thumbnailUrl: sanitizeString(
+          targetLesson.thumbnailUrl || 'preset:stadium',
+          SCHEMA_LIMITS.URL_MAX,
+          'preset:stadium'
+        ),
+        pdfs: orderedPdfs,
+        folderId: sanitizeString(targetLesson.folderId || '', 128, ''),
+        ...(typeof targetLesson.order === 'number'
+          ? { order: targetLesson.order }
+          : {}),
+        isFree: Boolean(targetLesson.isFree),
+        isPublished: true,
+        authorId: activeUid,
+        createdAt: toFirestoreTimestamp(targetLesson.createdAt),
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `lessons/${lessonId}`);
     }
   };
 
@@ -3254,6 +3750,44 @@ export default function App() {
     return null;
   }, [currentLessonIndex, orderedClassroomLessons]);
 
+  const filteredTabLessons = useMemo(() => {
+    return lessons.filter((l) => {
+      if (activeNav === 'free') {
+        return l.isFree;
+      }
+      return isBlockedUser ? l.isFree : true;
+    });
+  }, [lessons, activeNav, isBlockedUser]);
+
+  const handleMoveClassroomLesson = useCallback(
+    (index: number, direction: 'up' | 'down') => {
+      const targetIndex = direction === 'up' ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= orderedClassroomLessons.length) {
+        return;
+      }
+      const next = [...orderedClassroomLessons];
+      const [moved] = next.splice(index, 1);
+      next.splice(targetIndex, 0, moved);
+      const nextIds = next.map((l) => l.id);
+      if (activePlaylist) {
+        void handleReorderPlaylistLessons(activePlaylist.id, nextIds);
+      } else {
+        void handleReorderLessons(nextIds);
+      }
+    },
+    [orderedClassroomLessons, activePlaylist, lessons, playlists, isAdmin]
+  );
+
+  const handleMoveClassroomPdf = (index: number, direction: 'up' | 'down') => {
+    if (!activeLesson?.pdfs) return;
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= activeLesson.pdfs.length) return;
+    const next = [...activeLesson.pdfs];
+    const [moved] = next.splice(index, 1);
+    next.splice(targetIndex, 0, moved);
+    void handleReorderLessonPdfs(activeLesson.id, next);
+  };
+
   // Persist lastWatchedLessonId and watch metadata whenever the student enters or switches a lesson
   useEffect(() => {
     if (!user?.uid || !selectedLessonId) return;
@@ -4138,11 +4672,14 @@ export default function App() {
                         key={lesson.id}
                         lesson={lesson}
                         idx={idx}
+                        totalCount={orderedClassroomLessons.length}
                         isCurrent={lesson.id === activeLesson.id}
                         isDone={Boolean(
                           userProgress?.completedLessonIds.includes(lesson.id)
                         )}
+                        canReorder={isAdmin}
                         onSelect={handleSelectLessonFromDropdown}
+                        onMove={handleMoveClassroomLesson}
                       />
                     ))}
                   </div>
@@ -4234,7 +4771,7 @@ export default function App() {
                 </h2>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {activeLesson.pdfs.map((pdf) => (
+                  {activeLesson.pdfs.map((pdf, idx) => (
                     <div
                       key={pdf.id}
                       className="flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-surface border border-line hover:border-brand-soft/40 shadow-card transition-colors"
@@ -4249,6 +4786,28 @@ export default function App() {
                       </div>
 
                       <div className="flex items-center gap-1.5 shrink-0">
+                        {isAdmin && activeLesson.pdfs.length > 1 && (
+                          <>
+                            <button
+                              type="button"
+                              disabled={idx === 0}
+                              onClick={() => handleMoveClassroomPdf(idx, 'up')}
+                              className="p-1.5 rounded-lg bg-chip hover:bg-chip-hover text-ink-2 hover:text-ink disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                              title="Subir PDF"
+                            >
+                              <ArrowUp className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={idx === activeLesson.pdfs.length - 1}
+                              onClick={() => handleMoveClassroomPdf(idx, 'down')}
+                              className="p-1.5 rounded-lg bg-chip hover:bg-chip-hover text-ink-2 hover:text-ink disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                              title="Descer PDF"
+                            >
+                              <ArrowDown className="w-3.5 h-3.5" />
+                            </button>
+                          </>
+                        )}
                         <button
                           type="button"
                           onClick={() => setActivePdf(pdf)}
@@ -4298,6 +4857,10 @@ export default function App() {
               onSaveLessonFolder={handleSaveLessonFolder}
               onDeleteLessonFolder={requestDeleteLessonFolder}
               onMoveLessonsToFolder={handleMoveLessonsToFolder}
+              onReorderLessonFolders={handleReorderLessonFolders}
+              onReorderLessons={handleReorderLessons}
+              onReorderPlaylists={handleReorderPlaylists}
+              onReorderCourses={handleReorderCourses}
               onSavePlaylist={handleSavePlaylist}
               onDeletePlaylist={requestDeletePlaylist}
               onSaveCourse={handleSaveCourse}
@@ -4584,56 +5147,43 @@ export default function App() {
                   </div>
                 </div>
 
-                {(() => {
-                  const list = lessons.filter((l) => {
-                    if (activeNav === 'free') {
-                      return l.isFree;
-                    }
-                    return isBlockedUser ? l.isFree : true;
-                  });
-
-                  if (list.length === 0) {
-                    return (
-                      <div className="py-16 text-center rounded-2xl bg-surface border border-line-soft shadow-card">
-                        <p className="text-sm text-ink-muted">
-                          Nenhuma aula disponível.
-                        </p>
-                      </div>
-                    );
-                  }
-
-                  return (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                      {list.map((lesson) => (
-                        <div
-                          key={lesson.id}
-                          onClick={() => openDirectLesson(lesson)}
-                          className="cv-auto-row group rounded-2xl bg-surface border border-line hover:border-brand-soft/60 shadow-card overflow-hidden transition-all flex flex-col cursor-pointer"
-                        >
-                          <div className="relative aspect-video bg-black overflow-hidden">
-                            <CoverArtwork
-                              src={lesson.thumbnailUrl}
-                              title={lesson.title}
-                              className="w-full h-full"
-                              showBottomPurpleBar={false}
-                            />
-                            <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                              <div className="w-11 h-11 rounded-full bg-brand text-white flex items-center justify-center shadow-lg">
-                                <Play className="w-5 h-5 fill-current ml-0.5" />
-                              </div>
+                {filteredTabLessons.length === 0 ? (
+                  <div className="py-16 text-center rounded-2xl bg-surface border border-line-soft shadow-card">
+                    <p className="text-sm text-ink-muted">
+                      Nenhuma aula disponível.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {filteredTabLessons.map((lesson) => (
+                      <div
+                        key={lesson.id}
+                        onClick={() => openDirectLesson(lesson)}
+                        className="cv-auto-row group rounded-2xl bg-surface border border-line hover:border-brand-soft/60 shadow-card overflow-hidden transition-all flex flex-col cursor-pointer"
+                      >
+                        <div className="relative aspect-video bg-black overflow-hidden">
+                          <CoverArtwork
+                            src={lesson.thumbnailUrl}
+                            title={lesson.title}
+                            className="w-full h-full"
+                            showBottomPurpleBar={false}
+                          />
+                          <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                            <div className="w-11 h-11 rounded-full bg-brand text-white flex items-center justify-center shadow-lg">
+                              <Play className="w-5 h-5 fill-current ml-0.5" />
                             </div>
                           </div>
-
-                          <div className="p-3.5">
-                            <h3 className="text-xs font-bold text-ink line-clamp-2 group-hover:text-brand-accent transition-colors">
-                              {lesson.title}
-                            </h3>
-                          </div>
                         </div>
-                      ))}
-                    </div>
-                  );
-                })()}
+
+                        <div className="p-3.5">
+                          <h3 className="text-xs font-bold text-ink line-clamp-2 group-hover:text-brand-accent transition-colors">
+                            {lesson.title}
+                          </h3>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </section>
             )}
           </div>

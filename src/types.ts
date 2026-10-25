@@ -10,6 +10,7 @@ export interface PdfAttachment {
 export interface LessonFolder {
   id: string;
   name: string;
+  order?: number;
   isPublished: boolean;
   authorId: string;
   createdAt?: Timestamp;
@@ -25,6 +26,7 @@ export interface Lesson {
   thumbnailUrl: string;
   pdfs: PdfAttachment[];
   folderId?: string;
+  order?: number;
   isFree: boolean;
   isPublished: boolean;
   authorId: string;
@@ -38,6 +40,7 @@ export interface Playlist {
   description: string;
   coverUrl: string;
   lessonIds: string[];
+  order?: number;
   isPublished: boolean;
   authorId: string;
   createdAt?: Timestamp;
@@ -53,6 +56,7 @@ export interface Course {
   coverUrl: string;
   bannerUrl: string;
   playlistIds: string[];
+  order?: number;
   featured: boolean;
   isPublished: boolean;
   authorId: string;
@@ -300,10 +304,17 @@ export function formatBirthDateDisplay(raw?: string): string {
   return v;
 }
 
+let safeIdCounter = 0;
+
 export function generateSafeId(prefix: string): string {
+  safeIdCounter = (safeIdCounter + 1) % 1_000_000;
   const randomPart = Math.random().toString(36).substring(2, 10);
   const timePart = Date.now().toString(36);
-  return `${prefix}_${timePart}_${randomPart}`.replace(/[^a-zA-Z0-9_\-]/g, '');
+  const countPart = safeIdCounter.toString(36);
+  return `${prefix}_${timePart}_${countPart}_${randomPart}`.replace(
+    /[^a-zA-Z0-9_\-]/g,
+    ''
+  );
 }
 
 export function emailToStudentDocId(email: string): string {
@@ -429,3 +440,24 @@ export const COVER_PRESETS: CoverPreset[] = [
 
 export const FREE_COURSE_ID = 'course_free_access';
 export const FREE_PLAYLIST_ID = 'playlist_free_access';
+
+export function sortByOrder<T extends { id: string; order?: number }>(
+  items: T[]
+): T[] {
+  return [...items]
+    .map((item, idx) => ({ item, idx }))
+    .sort((a, b) => {
+      const aHas =
+        typeof a.item.order === 'number' && Number.isFinite(a.item.order);
+      const bHas =
+        typeof b.item.order === 'number' && Number.isFinite(b.item.order);
+      if (aHas && bHas && a.item.order !== b.item.order) {
+        return (a.item.order as number) - (b.item.order as number);
+      }
+      if (aHas && !bHas) return -1;
+      if (!aHas && bHas) return 1;
+      return a.idx - b.idx;
+    })
+    .map((entry) => entry.item);
+}
+

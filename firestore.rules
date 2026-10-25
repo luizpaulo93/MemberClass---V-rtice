@@ -107,7 +107,7 @@ service cloud.firestore {
       ]) &&
       data.keys().hasOnly([
         'title', 'description', 'youtubeId', 'duration', 'thumbnailUrl',
-        'pdfs', 'folderId', 'isFree', 'isPublished', 'authorId', 'createdAt', 'updatedAt'
+        'pdfs', 'folderId', 'order', 'isFree', 'isPublished', 'authorId', 'createdAt', 'updatedAt'
       ]) &&
       data.title is string && data.title.size() >= 1 && data.title.size() <= 160 &&
       data.description is string && data.description.size() >= 0 && data.description.size() <= 4000 &&
@@ -116,6 +116,7 @@ service cloud.firestore {
       data.thumbnailUrl is string && data.thumbnailUrl.size() >= 0 && data.thumbnailUrl.size() <= 900000 &&
       isValidPdfList(data.pdfs) &&
       (!('folderId' in data) || (data.folderId is string && data.folderId.size() >= 0 && data.folderId.size() <= 128)) &&
+      (!('order' in data) || ((data.order is int || data.order is float) && data.order >= -1000000 && data.order <= 1000000)) &&
       data.isFree is bool &&
       data.isPublished is bool &&
       data.authorId is string && isValidId(data.authorId) && data.authorId == request.auth.uid &&
@@ -128,9 +129,10 @@ service cloud.firestore {
         'name', 'isPublished', 'authorId', 'createdAt', 'updatedAt'
       ]) &&
       data.keys().hasOnly([
-        'name', 'isPublished', 'authorId', 'createdAt', 'updatedAt'
+        'name', 'order', 'isPublished', 'authorId', 'createdAt', 'updatedAt'
       ]) &&
       data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+      (!('order' in data) || ((data.order is int || data.order is float) && data.order >= -1000000 && data.order <= 1000000)) &&
       data.isPublished is bool &&
       data.authorId is string && isValidId(data.authorId) && data.authorId == request.auth.uid &&
       data.createdAt is timestamp &&
@@ -143,13 +145,14 @@ service cloud.firestore {
         'isPublished', 'authorId', 'createdAt', 'updatedAt'
       ]) &&
       data.keys().hasOnly([
-        'title', 'description', 'coverUrl', 'lessonIds',
+        'title', 'description', 'coverUrl', 'lessonIds', 'order',
         'isPublished', 'authorId', 'createdAt', 'updatedAt'
       ]) &&
       data.title is string && data.title.size() >= 1 && data.title.size() <= 160 &&
       data.description is string && data.description.size() >= 0 && data.description.size() <= 1500 &&
       data.coverUrl is string && data.coverUrl.size() >= 0 && data.coverUrl.size() <= 900000 &&
       isValidStringArray(data.lessonIds, 100) &&
+      (!('order' in data) || ((data.order is int || data.order is float) && data.order >= -1000000 && data.order <= 1000000)) &&
       data.isPublished is bool &&
       data.authorId is string && isValidId(data.authorId) && data.authorId == request.auth.uid &&
       data.createdAt is timestamp &&
@@ -164,7 +167,7 @@ service cloud.firestore {
       ]) &&
       data.keys().hasOnly([
         'title', 'subtitle', 'description', 'category', 'coverUrl',
-        'bannerUrl', 'playlistIds', 'featured', 'isPublished',
+        'bannerUrl', 'playlistIds', 'order', 'featured', 'isPublished',
         'authorId', 'createdAt', 'updatedAt'
       ]) &&
       data.title is string && data.title.size() >= 1 && data.title.size() <= 160 &&
@@ -174,6 +177,7 @@ service cloud.firestore {
       data.coverUrl is string && data.coverUrl.size() >= 0 && data.coverUrl.size() <= 900000 &&
       data.bannerUrl is string && data.bannerUrl.size() >= 0 && data.bannerUrl.size() <= 900000 &&
       isValidStringArray(data.playlistIds, 50) &&
+      (!('order' in data) || ((data.order is int || data.order is float) && data.order >= -1000000 && data.order <= 1000000)) &&
       data.featured is bool &&
       data.isPublished is bool &&
       data.authorId is string && isValidId(data.authorId) && data.authorId == request.auth.uid &&
@@ -521,7 +525,7 @@ service cloud.firestore {
           incoming().authorId == existing().authorId &&
           incoming().diff(existing()).affectedKeys().hasOnly([
             'title', 'description', 'youtubeId', 'duration',
-            'thumbnailUrl', 'pdfs', 'folderId', 'isFree', 'isPublished', 'updatedAt'
+            'thumbnailUrl', 'pdfs', 'folderId', 'order', 'isFree', 'isPublished', 'updatedAt'
           ])
         )
       );
@@ -537,7 +541,7 @@ service cloud.firestore {
           incoming().createdAt == existing().createdAt &&
           incoming().authorId == existing().authorId &&
           incoming().diff(existing()).affectedKeys().hasOnly([
-            'name', 'isPublished', 'updatedAt'
+            'name', 'order', 'isPublished', 'updatedAt'
           ])
         )
       );
@@ -553,7 +557,7 @@ service cloud.firestore {
           incoming().createdAt == existing().createdAt &&
           incoming().authorId == existing().authorId &&
           incoming().diff(existing()).affectedKeys().hasOnly([
-            'title', 'description', 'coverUrl', 'lessonIds', 'isPublished', 'updatedAt'
+            'title', 'description', 'coverUrl', 'lessonIds', 'order', 'isPublished', 'updatedAt'
           ])
         )
       );
@@ -570,7 +574,7 @@ service cloud.firestore {
           incoming().authorId == existing().authorId &&
           incoming().diff(existing()).affectedKeys().hasOnly([
             'title', 'subtitle', 'description', 'category', 'coverUrl',
-            'bannerUrl', 'playlistIds', 'featured', 'isPublished', 'updatedAt'
+            'bannerUrl', 'playlistIds', 'order', 'featured', 'isPublished', 'updatedAt'
           ])
         )
       );

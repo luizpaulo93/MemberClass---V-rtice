@@ -8,7 +8,7 @@
 // que alunos listem pdfChunks (query/getDocs), só ler cada parte pelo ID.
 
 import { deleteDoc, doc, getDoc, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { auth, db } from '../firebase';
 import { SCHEMA_LIMITS, generateSafeId, sanitizeString } from '../types';
 
 const PDF_CHUNK_COLLECTION = 'pdfChunks';
@@ -16,8 +16,6 @@ const PDF_CHUNK_COLLECTION = 'pdfChunks';
 const CHUNK_CHAR_SIZE = 700_000;
 const MAX_CHUNKS = 200; // regra: chunkIndex <= 200
 const UPLOAD_CONCURRENCY = 4;
-// PDFs pequenos ficam dentro do próprio documento (regra: url <= 900.000)
-const INLINE_MAX_CHARS = 500_000;
 
 export interface StudentPdfWatermarkInfo {
   name: string;
@@ -113,25 +111,19 @@ function parseChunkedUrl(pdfUrl: string): { pdfId: string; totalChunks: number }
   return { pdfId, totalChunks };
 }
 
-/**
- * Envia um arquivo PDF para o Firestore dividindo em partes na coleção `pdfChunks`
- * quando ultrapassa o tamanho inline.
- */
-export async function uploadPdfToFirestore(
-  file: File,
+async function uploadDataUrlToPdfChunks(
+  dataUrl: string,
   authorId: string,
   onProgress?: (percent: number) => void,
   isFree = false
 ): Promise<string> {
-  const dataUrl = await readFileAsDataUrl(file);
-
-  if (dataUrl.length <= INLINE_MAX_CHARS) {
-    onProgress?.(100);
-    return dataUrl;
+  if (!dataUrl) {
+    throw new Error('Conteúdo do arquivo PDF está vazio.');
   }
 
+  const effectiveAuthorId = auth.currentUser?.uid || authorId;
   const pdfId = generateSafeId('pdf');
-  const totalChunks = Math.ceil(dataUrl.length / CHUNK_CHAR_SIZE);
+  const totalChunks = Math.max(1, Math.ceil(dataUrl.length / CHUNK_CHAR_SIZE));
 
   if (totalChunks > MAX_CHUNKS) {
     throw new Error('O arquivo PDF excede o limite máximo permitido pela plataforma.');
@@ -150,7 +142,7 @@ export async function uploadPdfToFirestore(
         chunkIndex: i,
         totalChunks,
         data: slice,
-        authorId,
+        authorId: effectiveAuthorId,
         isFree: Boolean(isFree),
         createdAt: serverTimestamp(),
       });
@@ -166,6 +158,36 @@ export async function uploadPdfToFirestore(
   await Promise.all(workers);
 
   return `chunked:${pdfId}:${totalChunks}`;
+}
+
+/**
+ * Garante que qualquer PDF salvo anteriormente como data URL inline seja migrado
+ * para `pdfChunks`, evitando que documentos de aula com vários PDFs ultrapassem 1 MB.
+ */
+export async function ensurePdfUrlChunked(
+  pdfUrl: string,
+  authorId: string,
+  isFree = false
+): Promise<string> {
+  if (!pdfUrl || !pdfUrl.startsWith('data:')) {
+    return pdfUrl;
+  }
+  return uploadDataUrlToPdfChunks(pdfUrl, authorId, undefined, isFree);
+}
+
+/**
+ * Envia um arquivo PDF para o Firestore dividindo em partes na coleção `pdfChunks`.
+ * Todos os PDFs usam referência `chunked:{pdfId}:{totalChunks}` (~35 bytes) para que
+ * uma aula comporte vários PDFs sem nunca exceder o limite de 1 MB do documento da aula.
+ */
+export async function uploadPdfToFirestore(
+  file: File,
+  authorId: string,
+  onProgress?: (percent: number) => void,
+  isFree = false
+): Promise<string> {
+  const dataUrl = await readFileAsDataUrl(file);
+  return uploadDataUrlToPdfChunks(dataUrl, authorId, onProgress, isFree);
 }
 
 export async function uploadPdfFileToCloud(

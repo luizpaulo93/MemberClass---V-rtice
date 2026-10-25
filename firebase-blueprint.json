@@ -43,6 +43,10 @@
           "type": "string",
           "description": "Optional ID of the LessonFolder this lesson belongs to (0 to 128 chars)"
         },
+        "order": {
+          "type": "number",
+          "description": "Optional sort order index"
+        },
         "isFree": {
           "type": "boolean",
           "description": "Whether this lesson is unlocked for free trial users"
@@ -86,6 +90,10 @@
         "name": {
           "type": "string",
           "description": "Folder name (1 to 120 chars)"
+        },
+        "order": {
+          "type": "number",
+          "description": "Optional sort order index"
         },
         "isPublished": {
           "type": "boolean"
@@ -132,6 +140,10 @@
           "type": "array",
           "description": "Ordered list of up to 100 lesson IDs",
           "items": { "type": "string" }
+        },
+        "order": {
+          "type": "number",
+          "description": "Optional sort order index"
         },
         "isPublished": {
           "type": "boolean"
@@ -192,6 +204,10 @@
           "type": "array",
           "description": "Ordered list of up to 50 playlist IDs belonging to this course",
           "items": { "type": "string" }
+        },
+        "order": {
+          "type": "number",
+          "description": "Optional sort order index"
         },
         "featured": {
           "type": "boolean",

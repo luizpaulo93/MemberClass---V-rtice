@@ -1,5 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Trash2, FileText, Upload, Folder } from 'lucide-react';
+import {
+  X,
+  Trash2,
+  FileText,
+  Upload,
+  Folder,
+  ArrowUp,
+  ArrowDown,
+} from 'lucide-react';
+import { doc, getDoc } from 'firebase/firestore';
+import { auth, db } from '../firebase';
 import {
   Lesson,
   LessonFolder,
@@ -11,7 +21,7 @@ import {
   hasLessonVideo,
 } from '../types';
 import { CoverArtwork } from './CoverArtwork';
-import { uploadPdfFileToCloud } from '../utils/pdfStorage';
+import { ensurePdfUrlChunked, uploadPdfFileToCloud } from '../utils/pdfStorage';
 import { compressImageToDataUrl } from '../utils/imageCompress';
 
 interface LessonPopupModalProps {
@@ -52,9 +62,30 @@ export const LessonPopupModal: React.FC<LessonPopupModalProps> = ({
   const [isSaving, setIsSaving] = useState(false);
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const initializedKeyRef = useRef<string>('');
+
+  const movePdf = (index: number, direction: 'up' | 'down') => {
+    setPdfs((prev) => {
+      const targetIndex = direction === 'up' ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(index, 1);
+      next.splice(targetIndex, 0, moved);
+      return next;
+    });
+  };
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      initializedKeyRef.current = '';
+      return;
+    }
+    const modalKey = `${editingLesson ? editingLesson.id : 'new'}:${defaultFolderId || ''}`;
+    if (initializedKeyRef.current === modalKey) {
+      return;
+    }
+    initializedKeyRef.current = modalKey;
+
     setPdfError(null);
     setTitleError(false);
     if (editingLesson) {
@@ -66,8 +97,34 @@ export const LessonPopupModal: React.FC<LessonPopupModalProps> = ({
       );
       setDescription(editingLesson.description || '');
       setThumbnailUrl(editingLesson.thumbnailUrl || 'preset:stadium');
-      setPdfs(editingLesson.pdfs || []);
+      const initialPdfs = Array.isArray(editingLesson.pdfs)
+        ? editingLesson.pdfs
+        : [];
+      setPdfs(initialPdfs);
       setFolderId(editingLesson.folderId || defaultFolderId || '');
+
+      // Se algum PDF veio do cache local com URL vazia, busca a versão completa no Firestore
+      if (initialPdfs.some((p) => !p.url)) {
+        const lessonId = editingLesson.id;
+        getDoc(doc(db, 'lessons', lessonId))
+          .then((snap) => {
+            if (!snap.exists()) return;
+            const data = snap.data() as Partial<Lesson>;
+            const remotePdfs = Array.isArray(data.pdfs) ? data.pdfs : [];
+            if (remotePdfs.length === 0) return;
+            const remoteById = new Map(remotePdfs.map((p) => [p.id, p]));
+            setPdfs((prev) =>
+              prev.map((p) => {
+                if (p.url) return p;
+                const found = remoteById.get(p.id);
+                return found && found.url ? { ...p, url: found.url } : p;
+              })
+            );
+          })
+          .catch(() => {
+            // ignore offline error
+          });
+      }
     } else {
       setTitle('');
       setYoutubeInput('');
@@ -103,35 +160,49 @@ export const LessonPopupModal: React.FC<LessonPopupModalProps> = ({
     const files = e.target.files;
     if (!files || files.length === 0) return;
     const selectedFiles = Array.from(files);
+    e.target.value = '';
+    setPdfError(null);
+
+    if (pdfs.length >= SCHEMA_LIMITS.MAX_PDFS) {
+      setPdfError(`Limite máximo de ${SCHEMA_LIMITS.MAX_PDFS} PDFs por aula atingido.`);
+      return;
+    }
+
+    const remainingSlots = Math.max(0, SCHEMA_LIMITS.MAX_PDFS - pdfs.length);
+    const filesToUpload = selectedFiles.slice(0, remainingSlots);
+
     setUploadingPdf(true);
     setPdfUploadPct(5);
     const isLessonFree = editingLesson
       ? Boolean(editingLesson.isFree)
       : Boolean(defaultIsFree);
+    const activeUid = auth.currentUser?.uid || currentUserUid;
+
     try {
-      for (let i = 0; i < selectedFiles.length; i++) {
-        const file = selectedFiles[i];
+      for (let i = 0; i < filesToUpload.length; i++) {
+        const file = filesToUpload[i];
         const uploaded = await uploadPdfFileToCloud(
           file,
-          currentUserUid,
+          activeUid,
           (pct) => {
             const overall = Math.round(
-              ((i + pct / 100) / selectedFiles.length) * 100
+              ((i + pct / 100) / filesToUpload.length) * 100
             );
-            setPdfUploadPct(overall);
+            setPdfUploadPct(Math.max(5, overall));
           },
           isLessonFree
         );
         const item: PdfAttachment = {
           id: generateSafeId('pdf'),
-          title: uploaded.pdfTitle,
+          title: sanitizeString(
+            uploaded.pdfTitle,
+            SCHEMA_LIMITS.TITLE_MAX,
+            'Material PDF'
+          ),
           url: uploaded.pdfUrl,
-          sizeLabel: uploaded.sizeLabel,
+          sizeLabel: sanitizeString(uploaded.sizeLabel, 40, 'PDF'),
         };
-        setPdfs((prev) => [
-          ...prev.slice(0, SCHEMA_LIMITS.MAX_PDFS - 1),
-          item,
-        ]);
+        setPdfs((prev) => [...prev, item].slice(0, SCHEMA_LIMITS.MAX_PDFS));
       }
     } catch (err) {
       console.error('Erro ao subir PDF da aula:', err);
@@ -139,22 +210,54 @@ export const LessonPopupModal: React.FC<LessonPopupModalProps> = ({
     } finally {
       setUploadingPdf(false);
       setPdfUploadPct(0);
-      e.target.value = '';
     }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (uploadingPdf) return;
+    if (uploadingPdf || isSaving) return;
     if (!title.trim()) {
       setTitleError(true);
       titleInputRef.current?.focus();
       return;
     }
+    setPdfError(null);
     setIsSaving(true);
     try {
       const isNew = !editingLesson;
       const id = editingLesson?.id || generateSafeId('lesson');
+      const isLessonFree = editingLesson
+        ? Boolean(editingLesson.isFree)
+        : Boolean(defaultIsFree);
+      const activeUid = auth.currentUser?.uid || currentUserUid;
+
+      // Garante que qualquer PDF antigo em base64 inline seja migrado para pdfChunks
+      // antes de salvar a aula, evitando ultrapassar o limite de 1 MB por documento
+      const normalizedPdfs: PdfAttachment[] = [];
+      for (const p of pdfs.slice(0, SCHEMA_LIMITS.MAX_PDFS)) {
+        if (!p || !p.url || !p.url.trim()) continue;
+        const chunkedUrl = await ensurePdfUrlChunked(
+          p.url.trim(),
+          activeUid,
+          isLessonFree
+        );
+        if (!chunkedUrl) continue;
+        normalizedPdfs.push({
+          id: sanitizeString(
+            p.id || generateSafeId('pdf'),
+            SCHEMA_LIMITS.ID_MAX,
+            generateSafeId('pdf')
+          ),
+          title: sanitizeString(
+            p.title,
+            SCHEMA_LIMITS.TITLE_MAX,
+            'Material PDF'
+          ),
+          url: sanitizeString(chunkedUrl, SCHEMA_LIMITS.PDF_URL_MAX, ''),
+          sizeLabel: sanitizeString(p.sizeLabel, 40, 'PDF'),
+        });
+      }
+
       await onSaveLesson(
         {
           id,
@@ -171,17 +274,21 @@ export const LessonPopupModal: React.FC<LessonPopupModalProps> = ({
             SCHEMA_LIMITS.URL_MAX,
             'preset:stadium'
           ),
-          pdfs: pdfs.slice(0, SCHEMA_LIMITS.MAX_PDFS),
+          pdfs: normalizedPdfs,
           folderId: sanitizeString(folderId, 128, ''),
-          isFree: editingLesson
-            ? editingLesson.isFree
-            : Boolean(defaultIsFree),
+          ...(typeof editingLesson?.order === 'number'
+            ? { order: editingLesson.order }
+            : {}),
+          isFree: isLessonFree,
           isPublished: true,
-          authorId: editingLesson?.authorId || currentUserUid,
+          authorId: activeUid,
         },
         isNew
       );
       onClose();
+    } catch (err) {
+      console.error('Erro ao salvar aula:', err);
+      setPdfError('Não foi possível salvar a aula. Tente novamente.');
     } finally {
       setIsSaving(false);
     }
@@ -380,10 +487,10 @@ export const LessonPopupModal: React.FC<LessonPopupModalProps> = ({
 
               {pdfs.length > 0 && (
                 <div className="space-y-1.5 pt-1">
-                  {pdfs.map((pdf) => (
+                  {pdfs.map((pdf, idx) => (
                     <div
                       key={pdf.id}
-                      className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-surface-2 border border-line-soft"
+                      className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-surface-2 border border-line-soft transition-all"
                     >
                       <div className="flex items-center gap-2 min-w-0">
                         <FileText className="w-3.5 h-3.5 text-accent-400 shrink-0" />
@@ -396,17 +503,42 @@ export const LessonPopupModal: React.FC<LessonPopupModalProps> = ({
                           </span>
                         )}
                       </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setPdfs((prev) =>
-                            prev.filter((item) => item.id !== pdf.id)
-                          )
-                        }
-                        className="p-1 text-ink-muted hover:text-danger transition-colors cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {pdfs.length > 1 && (
+                          <>
+                            <button
+                              type="button"
+                              disabled={idx === 0}
+                              onClick={() => movePdf(idx, 'up')}
+                              className="p-1 rounded hover:bg-chip-hover text-ink-2 hover:text-ink disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                              title="Subir PDF"
+                            >
+                              <ArrowUp className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={idx === pdfs.length - 1}
+                              onClick={() => movePdf(idx, 'down')}
+                              className="p-1 rounded hover:bg-chip-hover text-ink-2 hover:text-ink disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                              title="Descer PDF"
+                            >
+                              <ArrowDown className="w-3.5 h-3.5" />
+                            </button>
+                          </>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setPdfs((prev) =>
+                              prev.filter((item) => item.id !== pdf.id)
+                            )
+                          }
+                          className="p-1 text-ink-muted hover:text-danger transition-colors cursor-pointer"
+                          title="Remover PDF"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
