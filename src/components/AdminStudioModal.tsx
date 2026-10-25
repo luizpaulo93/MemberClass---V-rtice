@@ -158,8 +158,8 @@ const CleanCoverInput: React.FC<CleanCoverInputProps> = ({
     setUploading(true);
     try {
       const maxRequestedSide = Math.max(targetWidth, targetHeight);
-      const maxSide = maxRequestedSide >= 1500 ? 1920 : 900;
-      const quality = maxSide >= 1920 ? 0.82 : 0.85;
+      const maxSide = maxRequestedSide >= 1500 ? 1280 : 680;
+      const quality = maxSide >= 1280 ? 0.78 : 0.8;
       const resizedDataUrl = await compressImageToDataUrl(
         file,
         maxSide,

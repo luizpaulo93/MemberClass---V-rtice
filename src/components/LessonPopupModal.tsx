@@ -144,7 +144,7 @@ export const LessonPopupModal: React.FC<LessonPopupModalProps> = ({
     if (!file) return;
     setUploadingImg(true);
     try {
-      const dataUrl = await compressImageToDataUrl(file, 720, 0.85);
+      const dataUrl = await compressImageToDataUrl(file, 640, 0.8);
       setThumbnailUrl(dataUrl);
     } catch (err) {
       console.error(err);
@@ -172,38 +172,59 @@ export const LessonPopupModal: React.FC<LessonPopupModalProps> = ({
     const filesToUpload = selectedFiles.slice(0, remainingSlots);
 
     setUploadingPdf(true);
-    setPdfUploadPct(5);
+    setPdfUploadPct(8);
     const isLessonFree = editingLesson
       ? Boolean(editingLesson.isFree)
       : Boolean(defaultIsFree);
     const activeUid = auth.currentUser?.uid || currentUserUid;
 
     try {
-      for (let i = 0; i < filesToUpload.length; i++) {
-        const file = filesToUpload[i];
-        const uploaded = await uploadPdfFileToCloud(
-          file,
-          activeUid,
-          (pct) => {
-            const overall = Math.round(
-              ((i + pct / 100) / filesToUpload.length) * 100
-            );
-            setPdfUploadPct(Math.max(5, overall));
-          },
-          isLessonFree
-        );
-        const item: PdfAttachment = {
-          id: generateSafeId('pdf'),
-          title: sanitizeString(
-            uploaded.pdfTitle,
-            SCHEMA_LIMITS.TITLE_MAX,
-            'Material PDF'
-          ),
-          url: uploaded.pdfUrl,
-          sizeLabel: sanitizeString(uploaded.sizeLabel, 40, 'PDF'),
-        };
-        setPdfs((prev) => [...prev, item].slice(0, SCHEMA_LIMITS.MAX_PDFS));
-      }
+      const fileProgress = new Array<number>(filesToUpload.length).fill(0);
+      const updateOverallProgress = () => {
+        const sum = fileProgress.reduce((acc, v) => acc + v, 0);
+        const avg = Math.round(sum / filesToUpload.length);
+        setPdfUploadPct(Math.max(8, Math.min(100, avg)));
+      };
+
+      let nextFileIdx = 0;
+      const FILE_CONCURRENCY = 3;
+
+      const fileWorker = async () => {
+        while (nextFileIdx < filesToUpload.length) {
+          const i = nextFileIdx++;
+          const file = filesToUpload[i];
+          if (!file) continue;
+          const uploaded = await uploadPdfFileToCloud(
+            file,
+            activeUid,
+            (pct) => {
+              fileProgress[i] = pct;
+              updateOverallProgress();
+            },
+            isLessonFree
+          );
+          fileProgress[i] = 100;
+          updateOverallProgress();
+          const item: PdfAttachment = {
+            id: generateSafeId('pdf'),
+            title: sanitizeString(
+              uploaded.pdfTitle,
+              SCHEMA_LIMITS.TITLE_MAX,
+              'Material PDF'
+            ),
+            url: uploaded.pdfUrl,
+            sizeLabel: sanitizeString(uploaded.sizeLabel, 40, 'PDF'),
+          };
+          setPdfs((prev) => [...prev, item].slice(0, SCHEMA_LIMITS.MAX_PDFS));
+        }
+      };
+
+      await Promise.all(
+        Array.from(
+          { length: Math.min(FILE_CONCURRENCY, filesToUpload.length) },
+          () => fileWorker()
+        )
+      );
     } catch (err) {
       console.error('Erro ao subir PDF da aula:', err);
       setPdfError('Não foi possível enviar o PDF. Tente novamente.');

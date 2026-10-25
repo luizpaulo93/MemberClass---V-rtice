@@ -38,8 +38,6 @@ import {
   Sliders,
   ArrowLeft,
   ArrowRight,
-  ArrowUp,
-  ArrowDown,
   Download,
   Lock,
   User as UserIcon,
@@ -148,26 +146,15 @@ const LazyComponentFallback = () => (
 interface ClassroomLessonRowProps {
   lesson: Lesson;
   idx: number;
-  totalCount: number;
   isCurrent: boolean;
   isDone: boolean;
-  canReorder?: boolean;
   onSelect: (lessonId: string) => void;
-  onMove?: (index: number, direction: 'up' | 'down') => void;
 }
 
 const ClassroomLessonRow = React.memo<ClassroomLessonRowProps>(
-  ({
-    lesson,
-    idx,
-    totalCount,
-    isCurrent,
-    isDone,
-    canReorder = false,
-    onSelect,
-    onMove,
-  }) => (
-    <div
+  ({ lesson, idx, isCurrent, isDone, onSelect }) => (
+    <button
+      type="button"
       onClick={() => onSelect(lesson.id)}
       className={`cv-auto-row w-full flex items-center justify-between gap-2.5 p-2.5 rounded-xl text-left transition-all cursor-pointer ${
         isCurrent
@@ -200,41 +187,10 @@ const ClassroomLessonRow = React.memo<ClassroomLessonRowProps>(
         </p>
       </div>
 
-      <div
-        className="flex items-center gap-1 shrink-0"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {canReorder && totalCount > 1 && onMove && (
-          <>
-            <button
-              type="button"
-              disabled={idx === 0}
-              onClick={() => onMove(idx, 'up')}
-              className={`p-1 rounded hover:bg-black/15 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer ${
-                isCurrent ? 'text-white' : 'text-ink-2 hover:text-ink'
-              }`}
-              title="Subir aula"
-            >
-              <ArrowUp className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              disabled={idx === totalCount - 1}
-              onClick={() => onMove(idx, 'down')}
-              className={`p-1 rounded hover:bg-black/15 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer ${
-                isCurrent ? 'text-white' : 'text-ink-2 hover:text-ink'
-              }`}
-              title="Descer aula"
-            >
-              <ArrowDown className="w-3.5 h-3.5" />
-            </button>
-          </>
-        )}
-        {isCurrent && (
-          <Play className="w-3.5 h-3.5 text-white fill-current shrink-0 ml-0.5" />
-        )}
-      </div>
-    </div>
+      {isCurrent && (
+        <Play className="w-3.5 h-3.5 text-white fill-current shrink-0" />
+      )}
+    </button>
   )
 );
 
@@ -3759,35 +3715,6 @@ export default function App() {
     });
   }, [lessons, activeNav, isBlockedUser]);
 
-  const handleMoveClassroomLesson = useCallback(
-    (index: number, direction: 'up' | 'down') => {
-      const targetIndex = direction === 'up' ? index - 1 : index + 1;
-      if (targetIndex < 0 || targetIndex >= orderedClassroomLessons.length) {
-        return;
-      }
-      const next = [...orderedClassroomLessons];
-      const [moved] = next.splice(index, 1);
-      next.splice(targetIndex, 0, moved);
-      const nextIds = next.map((l) => l.id);
-      if (activePlaylist) {
-        void handleReorderPlaylistLessons(activePlaylist.id, nextIds);
-      } else {
-        void handleReorderLessons(nextIds);
-      }
-    },
-    [orderedClassroomLessons, activePlaylist, lessons, playlists, isAdmin]
-  );
-
-  const handleMoveClassroomPdf = (index: number, direction: 'up' | 'down') => {
-    if (!activeLesson?.pdfs) return;
-    const targetIndex = direction === 'up' ? index - 1 : index + 1;
-    if (targetIndex < 0 || targetIndex >= activeLesson.pdfs.length) return;
-    const next = [...activeLesson.pdfs];
-    const [moved] = next.splice(index, 1);
-    next.splice(targetIndex, 0, moved);
-    void handleReorderLessonPdfs(activeLesson.id, next);
-  };
-
   // Persist lastWatchedLessonId and watch metadata whenever the student enters or switches a lesson
   useEffect(() => {
     if (!user?.uid || !selectedLessonId) return;
@@ -4672,14 +4599,11 @@ export default function App() {
                         key={lesson.id}
                         lesson={lesson}
                         idx={idx}
-                        totalCount={orderedClassroomLessons.length}
                         isCurrent={lesson.id === activeLesson.id}
                         isDone={Boolean(
                           userProgress?.completedLessonIds.includes(lesson.id)
                         )}
-                        canReorder={isAdmin}
                         onSelect={handleSelectLessonFromDropdown}
-                        onMove={handleMoveClassroomLesson}
                       />
                     ))}
                   </div>
@@ -4771,7 +4695,7 @@ export default function App() {
                 </h2>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {activeLesson.pdfs.map((pdf, idx) => (
+                  {activeLesson.pdfs.map((pdf) => (
                     <div
                       key={pdf.id}
                       className="flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-surface border border-line hover:border-brand-soft/40 shadow-card transition-colors"
@@ -4786,28 +4710,6 @@ export default function App() {
                       </div>
 
                       <div className="flex items-center gap-1.5 shrink-0">
-                        {isAdmin && activeLesson.pdfs.length > 1 && (
-                          <>
-                            <button
-                              type="button"
-                              disabled={idx === 0}
-                              onClick={() => handleMoveClassroomPdf(idx, 'up')}
-                              className="p-1.5 rounded-lg bg-chip hover:bg-chip-hover text-ink-2 hover:text-ink disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
-                              title="Subir PDF"
-                            >
-                              <ArrowUp className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              disabled={idx === activeLesson.pdfs.length - 1}
-                              onClick={() => handleMoveClassroomPdf(idx, 'down')}
-                              className="p-1.5 rounded-lg bg-chip hover:bg-chip-hover text-ink-2 hover:text-ink disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
-                              title="Descer PDF"
-                            >
-                              <ArrowDown className="w-3.5 h-3.5" />
-                            </button>
-                          </>
-                        )}
                         <button
                           type="button"
                           onClick={() => setActivePdf(pdf)}
