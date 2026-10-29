@@ -205,6 +205,131 @@ const ClassroomLessonRow = React.memo<ClassroomLessonRowProps>(
   )
 );
 
+interface DraggableHorizontalRowProps {
+  title: string;
+  subtitle?: string;
+  headerRight?: React.ReactNode;
+  children: React.ReactNode;
+}
+
+const DraggableHorizontalRow: React.FC<DraggableHorizontalRowProps> = ({
+  title,
+  subtitle,
+  headerRight,
+  children,
+}) => {
+  const rowRef = useRef<HTMLDivElement>(null);
+  const isDownRef = useRef(false);
+  const startXRef = useRef(0);
+  const scrollLeftRef = useRef(0);
+  const movedDistanceRef = useRef(0);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    const el = rowRef.current;
+    if (!el) return;
+    isDownRef.current = true;
+    movedDistanceRef.current = 0;
+    startXRef.current = e.pageX - el.offsetLeft;
+    scrollLeftRef.current = el.scrollLeft;
+  };
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isDownRef.current) return;
+    const el = rowRef.current;
+    if (!el) return;
+    const x = e.pageX - el.offsetLeft;
+    const delta = x - startXRef.current;
+    movedDistanceRef.current = Math.max(
+      movedDistanceRef.current,
+      Math.abs(delta)
+    );
+    if (movedDistanceRef.current > 6) {
+      if (!isDragging) setIsDragging(true);
+      e.preventDefault();
+      el.scrollLeft = scrollLeftRef.current - delta * 1.25;
+    }
+  };
+
+  const endDrag = () => {
+    isDownRef.current = false;
+    if (isDragging) {
+      window.setTimeout(() => setIsDragging(false), 40);
+    }
+  };
+
+  const handleClickCapture = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (movedDistanceRef.current > 8) {
+      e.stopPropagation();
+      e.preventDefault();
+      movedDistanceRef.current = 0;
+    }
+  };
+
+  const scrollByOffset = (direction: 'left' | 'right') => {
+    const el = rowRef.current;
+    if (!el) return;
+    const amount = Math.max(260, Math.round(el.clientWidth * 0.72));
+    el.scrollBy({
+      left: direction === 'left' ? -amount : amount,
+      behavior: 'smooth',
+    });
+  };
+
+  return (
+    <section className="space-y-3.5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-base md:text-lg font-bold text-ink tracking-tight">
+            {title}
+          </h2>
+          {subtitle && (
+            <p className="text-xs text-ink-muted font-medium">{subtitle}</p>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          {headerRight}
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => scrollByOffset('left')}
+              className="w-8 h-8 rounded-full bg-surface hover:bg-chip-hover border border-line text-ink-2 hover:text-ink flex items-center justify-center transition-colors cursor-pointer"
+              title="Arrastar para a esquerda"
+              aria-label="Rolar para a esquerda"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => scrollByOffset('right')}
+              className="w-8 h-8 rounded-full bg-surface hover:bg-chip-hover border border-line text-ink-2 hover:text-ink flex items-center justify-center transition-colors cursor-pointer"
+              title="Arrastar para a direita"
+              aria-label="Rolar para a direita"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div
+        ref={rowRef}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={endDrag}
+        onMouseLeave={endDrag}
+        onClickCapture={handleClickCapture}
+        className={`flex items-stretch gap-3.5 sm:gap-4 md:gap-5 overflow-x-auto pb-2 pt-1 select-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden ${
+          isDragging ? 'cursor-grabbing' : 'cursor-grab'
+        }`}
+      >
+        {children}
+      </div>
+    </section>
+  );
+};
+
 type NavSection =
   | 'home'
   | 'simulados'
@@ -3581,6 +3706,36 @@ export default function App() {
     );
   }, [courses, isAdmin, myStudentRecord, myStudentTurma]);
 
+  const [homePlaylistCourseFilter, setHomePlaylistCourseFilter] =
+    useState<string>('ALL');
+
+  const homeStudentPlaylists = useMemo(() => {
+    const items: Array<{ playlist: Playlist; course: Course }> = [];
+    const seenKeys = new Set<string>();
+
+    for (const course of homeCourses) {
+      for (const plId of course.playlistIds || []) {
+        const pl = playlists.find(
+          (p) => p.id === plId && p.id !== FREE_PLAYLIST_ID
+        );
+        if (!pl) continue;
+        const key = `${course.id}__${pl.id}`;
+        if (seenKeys.has(key)) continue;
+        seenKeys.add(key);
+        items.push({ playlist: pl, course });
+      }
+    }
+
+    if (
+      homePlaylistCourseFilter !== 'ALL' &&
+      homeCourses.some((c) => c.id === homePlaylistCourseFilter)
+    ) {
+      return items.filter((item) => item.course.id === homePlaylistCourseFilter);
+    }
+
+    return items;
+  }, [homeCourses, playlists, homePlaylistCourseFilter]);
+
   const buildUpdatedPlaylistTokens = (
     existingFavs: string[],
     playlistId: string | null,
@@ -5999,39 +6154,110 @@ export default function App() {
                 )}
 
                 {homeCourses.length > 0 && (
-                  <section className="space-y-4">
-                    <h2 className="text-base md:text-lg font-bold text-ink tracking-tight">
-                      Cursos
-                    </h2>
+                  <DraggableHorizontalRow
+                    title="Cursos"
+                    subtitle="Cursos liberados para o seu acesso"
+                  >
+                    {homeCourses.map((course) => (
+                      <button
+                        key={course.id}
+                        type="button"
+                        draggable={false}
+                        onClick={() => openCourse(course)}
+                        className="cover-poster-dark group relative w-[150px] sm:w-[172px] md:w-[192px] shrink-0 aspect-[2/3] rounded-2xl overflow-hidden border border-white/10 hover:border-[#3b82f6]/80 hover:-translate-y-1 text-left transition-all duration-300 shadow-card cursor-pointer"
+                      >
+                        <CoverArtwork
+                          src={course.coverUrl}
+                          title={course.title}
+                          className="w-full h-full pointer-events-none"
+                          showBottomPurpleBar
+                          locked={false}
+                        />
 
-                    <div
-                      ref={carouselRef}
-                      className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-7 gap-3.5 sm:gap-4 md:gap-5"
-                    >
-                      {homeCourses.map((course) => (
+                        <div className="absolute inset-x-0 bottom-0 p-3.5 sm:p-4 z-10 pointer-events-none">
+                          <h3 className="text-xs sm:text-sm font-extrabold uppercase tracking-wide line-clamp-2 drop-shadow text-white">
+                            {course.title}
+                          </h3>
+                        </div>
+                      </button>
+                    ))}
+                  </DraggableHorizontalRow>
+                )}
+
+                {homeStudentPlaylists.length > 0 && (
+                  <DraggableHorizontalRow
+                    title="Playlists dos seus cursos"
+                    subtitle="Arraste para o lado e clique na playlist que deseja assistir"
+                    headerRight={
+                      homeCourses.length > 1 ? (
+                        <div className="flex items-center gap-1 p-1 rounded-xl bg-surface border border-line overflow-x-auto max-w-full">
+                          <button
+                            type="button"
+                            onClick={() => setHomePlaylistCourseFilter('ALL')}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                              homePlaylistCourseFilter === 'ALL'
+                                ? 'bg-brand text-white keep-white-text'
+                                : 'text-ink-2 hover:text-ink'
+                            }`}
+                          >
+                            Todos
+                          </button>
+                          {homeCourses.map((c) => (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() => setHomePlaylistCourseFilter(c.id)}
+                              className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                                homePlaylistCourseFilter === c.id
+                                  ? 'bg-brand text-white keep-white-text'
+                                  : 'text-ink-2 hover:text-ink'
+                              }`}
+                            >
+                              {c.title}
+                            </button>
+                          ))}
+                        </div>
+                      ) : undefined
+                    }
+                  >
+                    {homeStudentPlaylists.map(({ playlist: pl, course }) => {
+                      const plLessonCount = (pl.lessonIds || []).filter((id) =>
+                        lessons.some((l) => l.id === id)
+                      ).length;
+
+                      return (
                         <button
-                          key={course.id}
+                          key={`${course.id}_${pl.id}`}
                           type="button"
-                          onClick={() => openCourse(course)}
-                          className="cover-poster-dark group relative w-full aspect-[2/3] rounded-2xl overflow-hidden border border-white/10 hover:border-[#3b82f6]/80 hover:-translate-y-1 text-left transition-all duration-300 shadow-card cursor-pointer"
+                          draggable={false}
+                          onClick={() => openPlaylistFromCourse(pl, course.id)}
+                          className="cover-poster-dark group relative w-[150px] sm:w-[172px] md:w-[192px] shrink-0 aspect-[2/3] rounded-2xl overflow-hidden border border-white/10 hover:border-[#3b82f6]/80 hover:-translate-y-1 text-left transition-all duration-300 shadow-card cursor-pointer"
                         >
                           <CoverArtwork
-                            src={course.coverUrl}
-                            title={course.title}
-                            className="w-full h-full"
+                            src={pl.coverUrl}
+                            title={pl.title}
+                            className="w-full h-full pointer-events-none"
                             showBottomPurpleBar
-                            locked={false}
                           />
 
-                          <div className="absolute inset-x-0 bottom-0 p-3.5 sm:p-4 z-10">
-                            <h3 className="text-xs sm:text-sm font-extrabold uppercase tracking-wide line-clamp-2 drop-shadow text-white">
+                          <div className="absolute top-2.5 inset-x-2.5 z-10 flex items-center justify-between gap-1.5 pointer-events-none">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-white/90 drop-shadow truncate">
                               {course.title}
+                            </span>
+                            <span className="text-[10px] font-mono tabular-nums font-bold text-white/90 drop-shadow shrink-0">
+                              {plLessonCount} aula{plLessonCount !== 1 ? 's' : ''}
+                            </span>
+                          </div>
+
+                          <div className="absolute inset-x-0 bottom-0 p-3.5 sm:p-4 z-10 pointer-events-none">
+                            <h3 className="text-xs sm:text-sm font-extrabold uppercase tracking-wide text-white line-clamp-2 drop-shadow">
+                              {pl.title}
                             </h3>
                           </div>
                         </button>
-                      ))}
-                    </div>
-                  </section>
+                      );
+                    })}
+                  </DraggableHorizontalRow>
                 )}
               </>
             )}

@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   SkipForward,
   RectangleHorizontal,
+  Captions,
 } from 'lucide-react';
 import { extractYoutubeId, extractYoutubeChannelId } from '../types';
 import { PlayerWatermark } from './PlayerWatermark';
@@ -132,6 +133,13 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
   const [isMuted, setIsMuted] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [isSpeedMenuOpen, setIsSpeedMenuOpen] = useState(false);
+  const [captionsEnabled, setCaptionsEnabled] = useState(false);
+  const [captionToast, setCaptionToast] = useState<string | null>(null);
+  const [seekFeedback, setSeekFeedback] = useState<{
+    side: 'left' | 'right';
+    seconds: number;
+    seq: number;
+  } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isPseudoFs, setIsPseudoFs] = useState(false);
   const [thumbLoaded, setThumbLoaded] = useState(false);
@@ -139,9 +147,25 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
   const [controlsVisible, setControlsVisible] = useState(false);
 
   const hideControlsTimer = useRef<number | null>(null);
+  const captionToastTimerRef = useRef<number | null>(null);
+  const seekFeedbackTimerRef = useRef<number | null>(null);
+  const edgeClickRef = useRef<{
+    side: 'left' | 'right' | null;
+    lastTime: number;
+    singleClickTimer: number | null;
+    accumulatedSec: number;
+  }>({
+    side: null,
+    lastTime: 0,
+    singleClickTimer: null,
+    accumulatedSec: 0,
+  });
+
   const isPlayingRef = useRef(false);
   const isLiveModeRef = useRef(initialIsLive);
   const isSpeedMenuOpenRef = useRef(false);
+  const captionsEnabledRef = useRef(false);
+  const currentTimeRef = useRef(currentTime);
   const initialTimeRef = useRef(initialTimeSec);
   const onTimeUpdateRef = useRef(onTimeUpdate);
   const onLiveVideoIdDetectedRef = useRef(onLiveVideoIdDetected);
@@ -159,6 +183,10 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
   useEffect(() => {
     initialTimeRef.current = initialTimeSec;
   }, [initialTimeSec]);
+
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+  }, [currentTime]);
 
   useEffect(() => {
     onTimeUpdateRef.current = onTimeUpdate;
@@ -180,10 +208,62 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
     isSpeedMenuOpenRef.current = isSpeedMenuOpen;
   }, [isSpeedMenuOpen]);
 
+  useEffect(() => {
+    captionsEnabledRef.current = captionsEnabled;
+  }, [captionsEnabled]);
+
   const clearHideTimer = useCallback(() => {
     if (hideControlsTimer.current !== null) {
       window.clearTimeout(hideControlsTimer.current);
       hideControlsTimer.current = null;
+    }
+  }, []);
+
+  const syncPlayerCaptions = useCallback((targetPlayer: any, enabled: boolean) => {
+    if (!targetPlayer) return;
+    try {
+      if (enabled) {
+        targetPlayer.loadModule?.('captions');
+        targetPlayer.loadModule?.('cc');
+        const applyCaptionTrack = () => {
+          try {
+            const tracks =
+              targetPlayer.getOption?.('captions', 'tracklist') ||
+              targetPlayer.getOption?.('cc', 'tracklist') ||
+              [];
+            if (Array.isArray(tracks) && tracks.length > 0) {
+              const preferred =
+                tracks.find(
+                  (t: any) =>
+                    t?.languageCode === 'pt' ||
+                    t?.languageCode === 'pt-BR' ||
+                    t?.languageCode === 'pt-PT' ||
+                    String(t?.languageName || '')
+                      .toLowerCase()
+                      .includes('portugu')
+                ) || tracks[0];
+              targetPlayer.setOption?.('captions', 'track', preferred);
+              targetPlayer.setOption?.('cc', 'track', preferred);
+            } else {
+              targetPlayer.setOption?.('captions', 'track', {
+                languageCode: 'pt',
+              });
+              targetPlayer.setOption?.('cc', 'track', { languageCode: 'pt' });
+            }
+          } catch {
+            // ignore track selection errors
+          }
+        };
+        applyCaptionTrack();
+        window.setTimeout(applyCaptionTrack, 220);
+      } else {
+        targetPlayer.setOption?.('captions', 'track', {});
+        targetPlayer.setOption?.('cc', 'track', {});
+        targetPlayer.unloadModule?.('captions');
+        targetPlayer.unloadModule?.('cc');
+      }
+    } catch {
+      // ignore caption module errors
     }
   }, []);
 
@@ -236,10 +316,12 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
     setIsLiveMode(nextIsLive);
     isLiveModeRef.current = nextIsLive;
     setCurrentTime(resumeSec);
+    currentTimeRef.current = resumeSec;
     setDuration(0);
     durationRef.current = 0;
     setIsSpeedMenuOpen(false);
     setControlsVisible(false);
+    setSeekFeedback(null);
     lastReportedSecRef.current = -1;
     clearHideTimer();
 
@@ -253,6 +335,15 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
     return () => {
       isComponentMountedRef.current = false;
       clearHideTimer();
+      if (captionToastTimerRef.current !== null) {
+        window.clearTimeout(captionToastTimerRef.current);
+      }
+      if (seekFeedbackTimerRef.current !== null) {
+        window.clearTimeout(seekFeedbackTimerRef.current);
+      }
+      if (edgeClickRef.current.singleClickTimer !== null) {
+        window.clearTimeout(edgeClickRef.current.singleClickTimer);
+      }
       if (playerRef.current && typeof playerRef.current.destroy === 'function') {
         try {
           playerRef.current.destroy();
@@ -324,6 +415,9 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
             rel: 0,
             showinfo: 0,
             playsinline: 1,
+            hl: 'pt',
+            cc_lang_pref: 'pt',
+            cc_load_policy: captionsEnabledRef.current ? 1 : 0,
             ...(useChannelLiveStream ? { channel: cleanChannelId } : {}),
             ...(!useChannelLiveStream && resumeSec > 0 ? { start: resumeSec } : {}),
           },
@@ -332,6 +426,7 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
               if (!isComponentMountedRef.current) return;
               setIsReady(true);
               inspectLiveMetadata(event.target);
+              syncPlayerCaptions(event.target, captionsEnabledRef.current);
               const total = Number(event.target.getDuration?.() || 0);
               if (total > 0) {
                 durationRef.current = total;
@@ -360,6 +455,7 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
                 setIsPlaying(true);
                 setHasStartedOnce(true);
                 setIsEnded(false);
+                syncPlayerCaptions(event.target, captionsEnabledRef.current);
                 const total = Number(event.target.getDuration?.() || 0);
                 if (total > 0) {
                   durationRef.current = total;
@@ -429,6 +525,7 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
     clearHideTimer,
     scheduleHideIn3Seconds,
     inspectLiveMetadata,
+    syncPlayerCaptions,
   ]);
 
   // Poll current time & intercept end-of-video BEFORE YouTube shows end-screen links
@@ -446,6 +543,7 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
           setDuration(total);
         }
         if (curr > 0 || hasStartedOnceRef.current) {
+          currentTimeRef.current = curr;
           setCurrentTime(curr);
         }
 
@@ -612,20 +710,137 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newTime = Number(e.target.value);
+    currentTimeRef.current = newTime;
     setCurrentTime(newTime);
     setIsEnded(false);
     playerRef.current?.seekTo?.(newTime, true);
     scheduleHideIn3Seconds();
   };
 
-  const skipSeconds = (delta: number) => {
-    const player = playerRef.current;
-    if (!player || !isReady) return;
-    const target = Math.max(0, Math.min((duration || 0) - 1, currentTime + delta));
-    setCurrentTime(target);
-    setIsEnded(false);
-    player.seekTo?.(target, true);
-    scheduleHideIn3Seconds();
+  const skipSeconds = useCallback(
+    (delta: number) => {
+      const player = playerRef.current;
+      if (!player || !isReady || isLiveModeRef.current) return;
+      const liveCurr = Number(
+        player.getCurrentTime?.() || currentTimeRef.current || 0
+      );
+      const maxDur = Number(
+        player.getDuration?.() || durationRef.current || duration || 0
+      );
+      const upperBound = maxDur > 1 ? maxDur - 1 : liveCurr + Math.max(0, delta);
+      const target = Math.max(0, Math.min(upperBound, liveCurr + delta));
+      currentTimeRef.current = target;
+      setCurrentTime(target);
+      setIsEnded(false);
+      player.seekTo?.(target, true);
+    },
+    [isReady, duration]
+  );
+
+  const triggerEdgeDoubleClickSeek = useCallback(
+    (side: 'left' | 'right') => {
+      if (!isReady || isLiveModeRef.current) return;
+      const delta = side === 'left' ? -10 : 10;
+      skipSeconds(delta);
+
+      const nextAccum =
+        edgeClickRef.current.side === side
+          ? edgeClickRef.current.accumulatedSec + 10
+          : 10;
+      edgeClickRef.current.accumulatedSec = nextAccum;
+
+      setSeekFeedback({
+        side,
+        seconds: nextAccum,
+        seq: Date.now(),
+      });
+
+      if (seekFeedbackTimerRef.current !== null) {
+        window.clearTimeout(seekFeedbackTimerRef.current);
+      }
+      seekFeedbackTimerRef.current = window.setTimeout(() => {
+        setSeekFeedback(null);
+        edgeClickRef.current.accumulatedSec = 0;
+      }, 700);
+    },
+    [isReady, skipSeconds]
+  );
+
+  const handleVideoSurfacePointerClick = (
+    e: React.MouseEvent<HTMLDivElement>
+  ) => {
+    if (isEnded) return;
+
+    if (!hasStartedOnceRef.current) {
+      startPlayback(true);
+      return;
+    }
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const relX = (e.clientX - rect.left) / Math.max(1, rect.width);
+    const isLeftEdge = relX <= 0.28;
+    const isRightEdge = relX >= 0.72;
+
+    if (!isLiveModeRef.current && (isLeftEdge || isRightEdge)) {
+      const side: 'left' | 'right' = isLeftEdge ? 'left' : 'right';
+      const now = Date.now();
+      const timeSinceLast = now - edgeClickRef.current.lastTime;
+
+      if (edgeClickRef.current.side === side && timeSinceLast <= 330) {
+        if (edgeClickRef.current.singleClickTimer !== null) {
+          window.clearTimeout(edgeClickRef.current.singleClickTimer);
+          edgeClickRef.current.singleClickTimer = null;
+        }
+        edgeClickRef.current.lastTime = now;
+        triggerEdgeDoubleClickSeek(side);
+        return;
+      }
+
+      edgeClickRef.current.side = side;
+      edgeClickRef.current.lastTime = now;
+      edgeClickRef.current.accumulatedSec = 0;
+
+      if (edgeClickRef.current.singleClickTimer !== null) {
+        window.clearTimeout(edgeClickRef.current.singleClickTimer);
+      }
+      edgeClickRef.current.singleClickTimer = window.setTimeout(() => {
+        edgeClickRef.current.singleClickTimer = null;
+        handleVideoSurfaceClick();
+      }, 250);
+      return;
+    }
+
+    handleVideoSurfaceClick();
+  };
+
+  const handleVideoSurfaceDoubleClick = (
+    e: React.MouseEvent<HTMLDivElement>
+  ) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const relX = (e.clientX - rect.left) / Math.max(1, rect.width);
+    if (!isLiveModeRef.current && (relX <= 0.28 || relX >= 0.72)) {
+      // Handled by edge double-click seek (-10s / +10s)
+      return;
+    }
+    toggleFullscreen();
+  };
+
+  const toggleCaptions = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const nextEnabled = !captionsEnabled;
+    setCaptionsEnabled(nextEnabled);
+    captionsEnabledRef.current = nextEnabled;
+    syncPlayerCaptions(playerRef.current, nextEnabled);
+
+    setCaptionToast(nextEnabled ? 'Legenda ativada' : 'Legenda desativada');
+    if (captionToastTimerRef.current !== null) {
+      window.clearTimeout(captionToastTimerRef.current);
+    }
+    captionToastTimerRef.current = window.setTimeout(() => {
+      setCaptionToast(null);
+    }, 1500);
+
+    scheduleHideIn3Seconds(isPlaying, false);
   };
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -755,7 +970,11 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div
           ref={mountNodeRef}
-          className="w-full h-[calc(100%+180px)] -mt-[90px] pointer-events-none"
+          className={`w-full pointer-events-none transition-all duration-200 ${
+            captionsEnabled
+              ? 'h-[calc(100%+110px)] -mt-[60px]'
+              : 'h-[calc(100%+180px)] -mt-[90px]'
+          }`}
         />
       </div>
 
@@ -792,14 +1011,48 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
         </div>
       )}
 
-      {/* Impenetrable Stealth Click/Context Shield over 100% of the video */}
+      {/* Impenetrable Stealth Click/Context Shield over 100% of the video (supports double-click on left/right edges for -10s/+10s) */}
       <div
-        onClick={handleVideoSurfaceClick}
-        onDoubleClick={toggleFullscreen}
+        onClick={handleVideoSurfacePointerClick}
+        onDoubleClick={handleVideoSurfaceDoubleClick}
         onContextMenu={(e) => e.preventDefault()}
         className="absolute inset-0 z-20 cursor-pointer"
         aria-label={isPlaying ? 'Controle do vídeo' : 'Reproduzir aula'}
       />
+
+      {/* Visual Feedback when student double-clicks left/right edge to seek -10s / +10s */}
+      {seekFeedback && (
+        <div
+          key={seekFeedback.seq}
+          className={`pointer-events-none absolute inset-y-0 z-30 flex items-center justify-center w-28 sm:w-36 ${
+            seekFeedback.side === 'left'
+              ? 'left-0 bg-gradient-to-r from-black/65 to-transparent rounded-r-full'
+              : 'right-0 bg-gradient-to-l from-black/65 to-transparent rounded-l-full'
+          }`}
+        >
+          <div className="flex flex-col items-center gap-1 text-white drop-shadow">
+            <div className="w-11 h-11 rounded-full bg-white/15 backdrop-blur-sm border border-white/25 flex items-center justify-center">
+              {seekFeedback.side === 'left' ? (
+                <RotateCcw className="w-5 h-5" />
+              ) : (
+                <RotateCw className="w-5 h-5" />
+              )}
+            </div>
+            <span className="text-xs font-mono font-bold tabular-nums">
+              {seekFeedback.side === 'left'
+                ? `-${seekFeedback.seconds}s`
+                : `+${seekFeedback.seconds}s`}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Brief Caption Status Toast */}
+      {captionToast && (
+        <div className="pointer-events-none absolute top-4 left-1/2 -translate-x-1/2 z-35 px-3.5 py-1.5 rounded-full bg-black/80 border border-white/15 text-white text-xs font-semibold backdrop-blur-sm shadow-lg">
+          {captionToast}
+        </div>
+      )}
 
       {/* A1. Dynamic anti-piracy student watermark (visible in normal and fullscreen modes) */}
       <PlayerWatermark text={watermarkText || ''} />
@@ -931,7 +1184,7 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
         </div>
 
         <div className="flex items-center justify-between gap-1 sm:gap-2">
-          {/* Left Controls: Play/Pause, -10s, +10s, Volume, Time */}
+          {/* Left Controls: Play/Pause, Volume, Time */}
           <div className="flex items-center gap-1 sm:gap-2 md:gap-3 min-w-0">
             <button
               type="button"
@@ -945,24 +1198,6 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
               ) : (
                 <Play className="w-4 h-4 fill-current ml-0.5" />
               )}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => skipSeconds(-10)}
-              className="w-10 h-10 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 flex items-center justify-center transition-colors shrink-0 cursor-pointer"
-              title="Voltar 10 segundos"
-            >
-              <RotateCcw className="w-4 h-4" />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => skipSeconds(10)}
-              className="w-10 h-10 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 flex items-center justify-center transition-colors shrink-0 cursor-pointer"
-              title="Avançar 10 segundos"
-            >
-              <RotateCw className="w-4 h-4" />
             </button>
 
             {/* Volume Control */}
@@ -1048,8 +1283,25 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
             )}
           </div>
 
-          {/* Right Controls: Speed Menu, Theater Mode, Fullscreen */}
+          {/* Right Controls: Captions (CC), Speed Menu, Theater Mode, Fullscreen */}
           <div className="relative flex items-center gap-1 sm:gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={toggleCaptions}
+              aria-pressed={captionsEnabled}
+              className={`h-10 px-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shrink-0 cursor-pointer ${
+                captionsEnabled
+                  ? 'bg-[#2563eb] text-white shadow-[0_0_12px_rgba(37,99,235,0.5)]'
+                  : 'bg-white/10 hover:bg-white/15 text-slate-200'
+              }`}
+              title={captionsEnabled ? 'Desativar legenda' : 'Ativar legenda'}
+            >
+              <Captions className="w-4 h-4" />
+              <span className="hidden sm:inline text-[11px] tracking-wide">
+                Legenda
+              </span>
+            </button>
+
             <div className="relative">
               <button
                 type="button"
