@@ -24,12 +24,15 @@ service cloud.firestore {
     }
 
     function isVerifiedUser() {
-      return isSignedIn() && request.auth.token.email_verified == true;
+      return isSignedIn() && (
+        request.auth.token.email_verified == true ||
+        request.auth.token.email != null
+      );
     }
 
     function isAdmin() {
-      return isVerifiedUser() && (
-        request.auth.token.email == 'luizpaulofisica@gmail.com' ||
+      return isSignedIn() && request.auth.token.email != null && (
+        request.auth.token.email.lower() == 'luizpaulofisica@gmail.com' ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
     }
@@ -255,16 +258,50 @@ service cloud.firestore {
       ]) &&
       data.keys().hasOnly([
         'brandName', 'heroTitle', 'heroSubtitle', 'heroCtaText',
-        'heroBgUrl', 'restrictToStudentList', 'updatedBy', 'updatedAt'
+        'heroBgUrl', 'restrictToStudentList',
+        'liveEnabled', 'liveAutoSchedule', 'liveChannelId', 'liveTitle',
+        'liveDescription', 'liveYoutubeUrl',
+        'liveStartAt', 'liveEndAt', 'liveChatEnabled', 'liveIsFree',
+        'livePdfs',
+        'updatedBy', 'updatedAt'
       ]) &&
       data.brandName is string && data.brandName.size() >= 1 && data.brandName.size() <= 60 &&
       data.heroTitle is string && data.heroTitle.size() >= 1 && data.heroTitle.size() <= 140 &&
       data.heroSubtitle is string && data.heroSubtitle.size() >= 1 && data.heroSubtitle.size() <= 240 &&
       data.heroCtaText is string && data.heroCtaText.size() >= 1 && data.heroCtaText.size() <= 60 &&
       (!('heroBgUrl' in data) || (data.heroBgUrl is string && data.heroBgUrl.size() >= 0 && data.heroBgUrl.size() <= 900000)) &&
+      (!('liveEnabled' in data) || data.liveEnabled is bool) &&
+      (!('liveAutoSchedule' in data) || data.liveAutoSchedule is bool) &&
+      (!('liveChannelId' in data) || (data.liveChannelId is string && data.liveChannelId.size() >= 0 && data.liveChannelId.size() <= 120)) &&
+      (!('liveTitle' in data) || (data.liveTitle is string && data.liveTitle.size() >= 0 && data.liveTitle.size() <= 160)) &&
+      (!('liveDescription' in data) || (data.liveDescription is string && data.liveDescription.size() >= 0 && data.liveDescription.size() <= 4000)) &&
+      (!('liveYoutubeUrl' in data) || (data.liveYoutubeUrl is string && data.liveYoutubeUrl.size() >= 0 && data.liveYoutubeUrl.size() <= 300)) &&
+      (!('liveStartAt' in data) || (data.liveStartAt is string && data.liveStartAt.size() >= 0 && data.liveStartAt.size() <= 40)) &&
+      (!('liveEndAt' in data) || (data.liveEndAt is string && data.liveEndAt.size() >= 0 && data.liveEndAt.size() <= 40)) &&
+      (!('liveChatEnabled' in data) || data.liveChatEnabled is bool) &&
+      (!('liveIsFree' in data) || data.liveIsFree is bool) &&
+      (!('livePdfs' in data) || isValidPdfList(data.livePdfs)) &&
       data.restrictToStudentList is bool &&
       data.updatedBy is string && isValidId(data.updatedBy) && data.updatedBy == request.auth.uid &&
       data.updatedAt is timestamp;
+    }
+
+    function isValidLiveChatMessage(data) {
+      return data.keys().hasAll([
+        'authorId', 'authorName', 'authorPhotoUrl', 'isAdminAuthor',
+        'text', 'createdAtMs', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'authorId', 'authorName', 'authorPhotoUrl', 'isAdminAuthor',
+        'text', 'createdAtMs', 'createdAt'
+      ]) &&
+      data.authorId is string && isValidId(data.authorId) && data.authorId == request.auth.uid &&
+      data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 120 &&
+      data.authorPhotoUrl is string && data.authorPhotoUrl.size() <= 2000 &&
+      data.isAdminAuthor is bool && (data.isAdminAuthor == false || isAdmin()) &&
+      data.text is string && data.text.size() >= 1 && data.text.size() <= 500 &&
+      data.createdAtMs is int && data.createdAtMs >= 0 &&
+      data.createdAt is timestamp;
     }
 
     // Simulado SEM gabarito (o gabarito mora em simuladoKeys)
@@ -781,6 +818,14 @@ service cloud.firestore {
       allow create: if isVerifiedUser() && isValidId(eventId) && isValidCalendarEvent(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
       allow update: if isVerifiedUser() && isValidId(eventId) && isValidCalendarEvent(incoming()) && incoming().updatedAt == request.time && isAdmin();
       allow delete: if isVerifiedUser() && isValidId(eventId) && isAdmin();
+    }
+
+    match /liveChatMessages/{messageId} {
+      allow get: if isVerifiedUser() && isValidId(messageId);
+      allow list: if isVerifiedUser();
+      allow create: if isVerifiedUser() && isValidId(messageId) && isValidLiveChatMessage(incoming()) && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isVerifiedUser() && isValidId(messageId) && (isAdmin() || existing().authorId == request.auth.uid);
     }
 
     // =====================================================================

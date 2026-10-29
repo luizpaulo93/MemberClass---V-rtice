@@ -4,17 +4,17 @@ import {
   Firestore,
   getFirestore,
   initializeFirestore,
-  persistentLocalCache,
-  persistentMultipleTabManager,
+  memoryLocalCache,
   setLogLevel,
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
-// Suppress internal transient network/WebChannel retry errors from @firebase/firestore when mobile tabs sleep or switch networks
+// Desativa logs internos ruidosos do SDK (@firebase/firestore) para evitar que
+// oscilações momentâneas de rede ou limites do plano gratuito disparem erros fatais no console.
 try {
   setLogLevel('silent');
 } catch {
-  // ignore if unsupported
+  // ignore
 }
 
 const app = initializeApp(firebaseConfig);
@@ -25,24 +25,13 @@ function createFirestoreInstance(): Firestore {
       app,
       {
         ignoreUndefinedProperties: true,
-        localCache: persistentLocalCache({
-          tabManager: persistentMultipleTabManager(),
-        }),
+        localCache: memoryLocalCache(),
+        experimentalForceLongPolling: true,
       },
       firebaseConfig.firestoreDatabaseId
     );
   } catch {
-    try {
-      return initializeFirestore(
-        app,
-        {
-          ignoreUndefinedProperties: true,
-        },
-        firebaseConfig.firestoreDatabaseId
-      );
-    } catch {
-      return getFirestore(app, firebaseConfig.firestoreDatabaseId);
-    }
+    return getFirestore(app, firebaseConfig.firestoreDatabaseId);
   }
 }
 
@@ -88,12 +77,15 @@ export function handleFirestoreError(
       ? String((error as { code?: unknown }).code)
       : '';
 
-  // Ignore transient offline / unavailable errors when device wakes from background
+  // Ignore transient offline / unavailable / quota exceeded errors
   if (
     code === 'unavailable' ||
+    code === 'resource-exhausted' ||
     message.includes('code=unavailable') ||
     message.includes('client is offline') ||
-    message.includes('Could not reach Cloud Firestore backend')
+    message.includes('Could not reach Cloud Firestore backend') ||
+    message.includes('Quota limit exceeded') ||
+    message.includes('Free daily write units')
   ) {
     return;
   }
@@ -102,6 +94,7 @@ export function handleFirestoreError(
     code: code || 'unknown',
     operationType,
     path: path || 'unknown',
+    message,
   };
   console.warn('Firestore Notice:', JSON.stringify(logPayload));
 }

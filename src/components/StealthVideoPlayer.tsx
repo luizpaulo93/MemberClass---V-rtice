@@ -12,7 +12,7 @@ import {
   SkipForward,
   RectangleHorizontal,
 } from 'lucide-react';
-import { extractYoutubeId } from '../types';
+import { extractYoutubeId, extractYoutubeChannelId } from '../types';
 import { PlayerWatermark } from './PlayerWatermark';
 
 declare global {
@@ -35,6 +35,8 @@ interface StealthVideoPlayerProps {
   theaterMode?: boolean;
   onToggleTheaterMode?: () => void;
   initialTimeSec?: number;
+  isLiveStream?: boolean;
+  onLiveVideoIdDetected?: (videoId: string) => void;
   onTimeUpdate?: (
     currentTimeSec: number,
     durationSec: number,
@@ -102,9 +104,17 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
   theaterMode = false,
   onToggleTheaterMode,
   initialTimeSec = 0,
+  isLiveStream = false,
+  onLiveVideoIdDetected,
   onTimeUpdate,
 }) => {
+  const cleanChannelId = extractYoutubeChannelId(youtubeIdOrUrl);
   const cleanVideoId = extractYoutubeId(youtubeIdOrUrl);
+  const initialIsLive = Boolean(
+    isLiveStream ||
+      cleanChannelId ||
+      (youtubeIdOrUrl && youtubeIdOrUrl.includes('/live/'))
+  );
   const wrapperRef = useRef<HTMLDivElement>(null);
   const mountNodeRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<any>(null);
@@ -113,8 +123,9 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [hasStartedOnce, setHasStartedOnce] = useState(false);
   const [isEnded, setIsEnded] = useState(false);
+  const [isLiveMode, setIsLiveMode] = useState(initialIsLive);
   const [currentTime, setCurrentTime] = useState(() =>
-    initialTimeSec > 2 ? initialTimeSec : 0
+    !initialIsLive && initialTimeSec > 2 ? initialTimeSec : 0
   );
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(100);
@@ -129,9 +140,11 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
 
   const hideControlsTimer = useRef<number | null>(null);
   const isPlayingRef = useRef(false);
+  const isLiveModeRef = useRef(initialIsLive);
   const isSpeedMenuOpenRef = useRef(false);
   const initialTimeRef = useRef(initialTimeSec);
   const onTimeUpdateRef = useRef(onTimeUpdate);
+  const onLiveVideoIdDetectedRef = useRef(onLiveVideoIdDetected);
   const lastReportedSecRef = useRef<number>(-1);
   const durationRef = useRef(0);
   const hasStartedOnceRef = useRef(false);
@@ -150,6 +163,14 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
   useEffect(() => {
     onTimeUpdateRef.current = onTimeUpdate;
   }, [onTimeUpdate]);
+
+  useEffect(() => {
+    onLiveVideoIdDetectedRef.current = onLiveVideoIdDetected;
+  }, [onLiveVideoIdDetected]);
+
+  useEffect(() => {
+    isLiveModeRef.current = isLiveMode;
+  }, [isLiveMode]);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
@@ -196,8 +217,15 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
   // Preload YouTube API script on mount, but DO NOT instantiate the iframe with videoId until user clicks Play
   useEffect(() => {
     isComponentMountedRef.current = true;
+    const nextIsLive = Boolean(
+      isLiveStream ||
+        cleanChannelId ||
+        (youtubeIdOrUrl && youtubeIdOrUrl.includes('/live/'))
+    );
     const resumeSec =
-      initialTimeRef.current > 2 ? Math.floor(initialTimeRef.current) : 0;
+      !nextIsLive && initialTimeRef.current > 2
+        ? Math.floor(initialTimeRef.current)
+        : 0;
     setIsReady(false);
     setIsPlaying(false);
     setHasStartedOnce(false);
@@ -205,6 +233,8 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
     suppressInitialControlsRef.current = true;
     isMountingPlayerRef.current = false;
     setIsEnded(false);
+    setIsLiveMode(nextIsLive);
+    isLiveModeRef.current = nextIsLive;
     setCurrentTime(resumeSec);
     setDuration(0);
     durationRef.current = 0;
@@ -233,14 +263,40 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
       playerRef.current = null;
       isMountingPlayerRef.current = false;
     };
-  }, [cleanVideoId, clearHideTimer]);
+  }, [cleanVideoId, cleanChannelId, isLiveStream, youtubeIdOrUrl, clearHideTimer]);
+
+  const inspectLiveMetadata = useCallback((targetPlayer: any) => {
+    if (!targetPlayer || typeof targetPlayer.getVideoData !== 'function') return;
+    try {
+      const videoData = targetPlayer.getVideoData();
+      if (videoData) {
+        if (
+          videoData.video_id &&
+          typeof videoData.video_id === 'string' &&
+          videoData.video_id !== 'live_stream'
+        ) {
+          onLiveVideoIdDetectedRef.current?.(videoData.video_id);
+        }
+        if (videoData.isLive || videoData.isLivePlayback) {
+          if (!isLiveModeRef.current) {
+            isLiveModeRef.current = true;
+            setIsLiveMode(true);
+          }
+        }
+      }
+    } catch {
+      // ignore metadata inspection errors
+    }
+  }, []);
 
   const mountAndStartPlayer = useCallback(() => {
     if (isMountingPlayerRef.current || playerRef.current) return;
     isMountingPlayerRef.current = true;
 
     const resumeSec =
-      initialTimeRef.current > 2 ? Math.floor(initialTimeRef.current) : 0;
+      !isLiveModeRef.current && initialTimeRef.current > 2
+        ? Math.floor(initialTimeRef.current)
+        : 0;
 
     loadYouTubeApi().then(() => {
       if (!isComponentMountedRef.current || !mountNodeRef.current) return;
@@ -249,9 +305,13 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
       const playerDiv = document.createElement('div');
       mountNodeRef.current.appendChild(playerDiv);
 
+      const useChannelLiveStream = Boolean(
+        cleanChannelId && cleanVideoId === cleanChannelId
+      );
+
       try {
         playerRef.current = new window.YT.Player(playerDiv, {
-          videoId: cleanVideoId,
+          videoId: useChannelLiveStream ? 'live_stream' : cleanVideoId,
           width: '100%',
           height: '100%',
           playerVars: {
@@ -264,12 +324,14 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
             rel: 0,
             showinfo: 0,
             playsinline: 1,
-            ...(resumeSec > 0 ? { start: resumeSec } : {}),
+            ...(useChannelLiveStream ? { channel: cleanChannelId } : {}),
+            ...(!useChannelLiveStream && resumeSec > 0 ? { start: resumeSec } : {}),
           },
           events: {
             onReady: (event: any) => {
               if (!isComponentMountedRef.current) return;
               setIsReady(true);
+              inspectLiveMetadata(event.target);
               const total = Number(event.target.getDuration?.() || 0);
               if (total > 0) {
                 durationRef.current = total;
@@ -289,6 +351,8 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
               if (!isComponentMountedRef.current) return;
               const YTState = window.YT?.PlayerState;
               const state = event.data;
+
+              inspectLiveMetadata(event.target);
 
               if (YTState && state === YTState.PLAYING) {
                 isPlayingRef.current = true;
@@ -359,7 +423,13 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
         console.warn('Erro ao inicializar YouTube Player:', err);
       }
     });
-  }, [cleanVideoId, clearHideTimer, scheduleHideIn3Seconds]);
+  }, [
+    cleanVideoId,
+    cleanChannelId,
+    clearHideTimer,
+    scheduleHideIn3Seconds,
+    inspectLiveMetadata,
+  ]);
 
   // Poll current time & intercept end-of-video BEFORE YouTube shows end-screen links
   useEffect(() => {
@@ -368,6 +438,7 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
       const player = playerRef.current;
       if (!player || typeof player.getCurrentTime !== 'function') return;
       try {
+        inspectLiveMetadata(player);
         const curr = Number(player.getCurrentTime() || 0);
         const total = Number(player.getDuration() || durationRef.current || 0);
         if (total > 0 && total !== durationRef.current) {
@@ -388,7 +459,13 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
         }
 
         // Intercept 0.85s before the end so YouTube's end-screen suggested videos never render
-        if (total > 3 && curr >= total - 0.85 && isPlayingRef.current) {
+        // IMPORTANT: Never trigger early end cutoff during a live stream
+        if (
+          !isLiveModeRef.current &&
+          total > 3 &&
+          curr >= total - 0.85 &&
+          isPlayingRef.current
+        ) {
           player.pauseVideo?.();
           isPlayingRef.current = false;
           setIsPlaying(false);
@@ -403,7 +480,7 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
     }, 250);
 
     return () => window.clearInterval(interval);
-  }, [isReady, clearHideTimer]);
+  }, [isReady, clearHideTimer, inspectLiveMetadata]);
 
   // Native Fullscreen listener
   useEffect(() => {
@@ -936,14 +1013,39 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
               </div>
             </div>
 
-            {/* Tabular Timestamp (hides "/ 00:00" on <=360px screens to prevent overlap) */}
-            <div className="text-xs font-mono tabular-nums text-slate-300 ml-0.5 sm:ml-1 whitespace-nowrap shrink-0">
-              <span>{formatSeconds(currentTime)}</span>
-              <span className="max-[360px]:hidden">
-                <span className="mx-1 text-slate-500">/</span>
-                <span className="text-slate-400">{formatSeconds(duration)}</span>
-              </span>
-            </div>
+            {/* Tabular Timestamp or Live Badge */}
+            {isLiveMode ? (
+              <button
+                type="button"
+                onClick={() => {
+                  const player = playerRef.current;
+                  if (!player) return;
+                  try {
+                    const liveEdge = Number(player.getDuration?.() || duration || 0);
+                    if (liveEdge > 0) {
+                      player.seekTo?.(liveEdge, true);
+                      setCurrentTime(liveEdge);
+                    }
+                    player.playVideo?.();
+                  } catch {
+                    // ignore
+                  }
+                }}
+                title="Pular para transmissão em tempo real"
+                className="ml-1 px-2.5 py-1 rounded-md bg-rose-600/90 hover:bg-rose-600 text-white text-[11px] font-extrabold uppercase tracking-wider inline-flex items-center gap-1.5 shrink-0 cursor-pointer transition-colors"
+              >
+                <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
+                <span>AO VIVO</span>
+              </button>
+            ) : (
+              <div className="text-xs font-mono tabular-nums text-slate-300 ml-0.5 sm:ml-1 whitespace-nowrap shrink-0">
+                <span>{formatSeconds(currentTime)}</span>
+                <span className="max-[360px]:hidden">
+                  <span className="mx-1 text-slate-500">/</span>
+                  <span className="text-slate-400">{formatSeconds(duration)}</span>
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Right Controls: Speed Menu, Theater Mode, Fullscreen */}

@@ -48,6 +48,12 @@ import {
   Calendar as CalendarIcon,
   Sparkles,
   Compass,
+  Radio,
+  Settings,
+  Send,
+  Upload,
+  Folder,
+  Shield,
 } from 'lucide-react';
 import {
   auth,
@@ -67,6 +73,7 @@ import {
   UserProgress,
   PlatformConfig,
   PdfAttachment,
+  LiveChatMessage,
   Simulado,
   SimuladoSubmission,
   Doubt,
@@ -79,6 +86,7 @@ import {
   formatBirthDateInput,
   formatBirthDateDisplay,
   hasLessonVideo,
+  extractYoutubeId,
   SCHEMA_LIMITS,
   FREE_COURSE_ID,
   FREE_PLAYLIST_ID,
@@ -92,8 +100,11 @@ import {
   triggerPdfDownload,
   setStudentPdfWatermarkInfo,
   updatePdfChunksIsFree,
+  deletePdfFromFirestore,
+  uploadPdfFileToCloud,
 } from './utils/pdfStorage';
 import { Mentoria, subscribeMyMentoria } from './utils/mentoriaService';
+import { UploadDiagnosticAlert } from './components/UploadDiagnosticAlert';
 
 const PdfCanvasViewer = React.lazy(() =>
   import('./components/PdfCanvasViewer').then((m) => ({
@@ -287,9 +298,46 @@ class SafeErrorBoundary extends React.Component<
 
 const CONFIG_CACHE_KEY = 'vertice_platform_config_v1';
 const BOOT_CACHE_KEY = 'vertice_fast_boot_v2';
+const COVERS_CACHE_KEY = 'vertice_covers_map_v1';
 const AUTH_HINT_KEY = 'vertice_auth_hint_v2';
 const THEME_STORAGE_KEY = 'vertice_theme_v1';
-const FAST_BOOT_IMAGE_MAX_CHARS = 60000;
+const FAST_BOOT_IMAGE_MAX_CHARS = 850000;
+
+function loadCoversCacheMap(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(COVERS_CACHE_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function saveCoverInCacheMap(id: string, url: string | undefined) {
+  if (!id || !url) return;
+  try {
+    const map = loadCoversCacheMap();
+    if (!url.startsWith('preset:') && url.length > 0) {
+      map[id] = url;
+      localStorage.setItem(COVERS_CACHE_KEY, JSON.stringify(map));
+    }
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
+function resolveCachedCover(id: string, currentUrl: string | undefined, fallbackPreset = 'preset:stadium'): string {
+  const trimmed = (currentUrl || '').trim();
+  if (trimmed && !trimmed.startsWith('preset:')) {
+    saveCoverInCacheMap(id, trimmed);
+    return trimmed;
+  }
+  const cached = loadCoversCacheMap()[id];
+  if (cached && !cached.startsWith('preset:')) {
+    return cached;
+  }
+  return trimmed || fallbackPreset;
+}
 
 interface FastBootCache {
   courses?: Course[];
@@ -318,6 +366,17 @@ const DEFAULT_CONFIG: PlatformConfig = {
   heroCtaText: 'Confira agora!',
   heroBgUrl: '',
   restrictToStudentList: true,
+  liveEnabled: false,
+  liveAutoSchedule: false,
+  liveChannelId: '',
+  liveTitle: '',
+  liveDescription: '',
+  liveYoutubeUrl: '',
+  liveStartAt: '',
+  liveEndAt: '',
+  liveChatEnabled: true,
+  liveIsFree: false,
+  livePdfs: [],
   updatedBy: 'system',
 };
 
@@ -341,6 +400,20 @@ function loadCachedPlatformConfig(): {
             typeof parsed.restrictToStudentList === 'boolean'
               ? parsed.restrictToStudentList
               : true,
+          liveEnabled: Boolean(parsed.liveEnabled),
+          liveAutoSchedule: Boolean(parsed.liveAutoSchedule),
+          liveChannelId: parsed.liveChannelId || '',
+          liveTitle: parsed.liveTitle || '',
+          liveDescription: parsed.liveDescription || '',
+          liveYoutubeUrl: parsed.liveYoutubeUrl || '',
+          liveStartAt: parsed.liveStartAt || '',
+          liveEndAt: parsed.liveEndAt || '',
+          liveChatEnabled:
+            parsed.liveChatEnabled !== undefined
+              ? Boolean(parsed.liveChatEnabled)
+              : true,
+          liveIsFree: Boolean(parsed.liveIsFree),
+          livePdfs: Array.isArray(parsed.livePdfs) ? parsed.livePdfs : [],
           updatedBy: parsed.updatedBy || 'system',
         },
       };
@@ -366,7 +439,26 @@ function loadFastBootCache(): FastBootCache | null {
   try {
     const raw = localStorage.getItem(BOOT_CACHE_KEY);
     if (!raw) return null;
-    memoryBootCache = JSON.parse(raw) as FastBootCache;
+    const parsed = JSON.parse(raw) as FastBootCache;
+    if (parsed.courses) {
+      parsed.courses = parsed.courses.map((c) => ({
+        ...c,
+        coverUrl: resolveCachedCover(c.id, c.coverUrl, 'preset:stadium'),
+      }));
+    }
+    if (parsed.playlists) {
+      parsed.playlists = parsed.playlists.map((p) => ({
+        ...p,
+        coverUrl: resolveCachedCover(p.id, p.coverUrl, 'preset:trophy'),
+      }));
+    }
+    if (parsed.lessons) {
+      parsed.lessons = parsed.lessons.map((l) => ({
+        ...l,
+        thumbnailUrl: resolveCachedCover(l.id, l.thumbnailUrl, 'preset:stadium'),
+      }));
+    }
+    memoryBootCache = parsed;
     return memoryBootCache;
   } catch {
     return null;
@@ -378,42 +470,51 @@ function saveFastBootCache(patch: Partial<FastBootCache>) {
     const prev = memoryBootCache || loadFastBootCache() || {};
     const merged: FastBootCache = { ...prev, ...patch };
     if (patch.courses && merged.courses) {
-      merged.courses = merged.courses.map((c) => ({
-        ...c,
-        coverUrl:
-          c.coverUrl && c.coverUrl.length > FAST_BOOT_IMAGE_MAX_CHARS
-            ? ''
-            : c.coverUrl,
-        bannerUrl:
-          c.bannerUrl && c.bannerUrl.length > FAST_BOOT_IMAGE_MAX_CHARS
-            ? ''
-            : c.bannerUrl,
-      }));
+      merged.courses = merged.courses.map((c) => {
+        const resolvedCover = resolveCachedCover(c.id, c.coverUrl, 'preset:stadium');
+        return {
+          ...c,
+          coverUrl:
+            resolvedCover.length > FAST_BOOT_IMAGE_MAX_CHARS
+              ? ''
+              : resolvedCover,
+          bannerUrl:
+            c.bannerUrl && c.bannerUrl.length > FAST_BOOT_IMAGE_MAX_CHARS
+              ? ''
+              : c.bannerUrl,
+        };
+      });
     }
     if (patch.playlists && merged.playlists) {
-      merged.playlists = merged.playlists.map((p) => ({
-        ...p,
-        coverUrl:
-          p.coverUrl && p.coverUrl.length > FAST_BOOT_IMAGE_MAX_CHARS
-            ? ''
-            : p.coverUrl,
-      }));
+      merged.playlists = merged.playlists.map((p) => {
+        const resolvedCover = resolveCachedCover(p.id, p.coverUrl, 'preset:trophy');
+        return {
+          ...p,
+          coverUrl:
+            resolvedCover.length > FAST_BOOT_IMAGE_MAX_CHARS
+              ? ''
+              : resolvedCover,
+        };
+      });
     }
     if (patch.lessons && merged.lessons) {
-      merged.lessons = merged.lessons.map((l) => ({
-        ...l,
-        thumbnailUrl:
-          l.thumbnailUrl && l.thumbnailUrl.length > FAST_BOOT_IMAGE_MAX_CHARS
-            ? ''
-            : l.thumbnailUrl,
-        pdfs: (l.pdfs || []).map((pdf) => ({
-          ...pdf,
-          url:
-            pdf.url && pdf.url.length > FAST_BOOT_IMAGE_MAX_CHARS
+      merged.lessons = merged.lessons.map((l) => {
+        const resolvedThumb = resolveCachedCover(l.id, l.thumbnailUrl, 'preset:stadium');
+        return {
+          ...l,
+          thumbnailUrl:
+            resolvedThumb.length > FAST_BOOT_IMAGE_MAX_CHARS
               ? ''
-              : pdf.url,
-        })),
-      }));
+              : resolvedThumb,
+          pdfs: (l.pdfs || []).map((pdf) => ({
+            ...pdf,
+            url:
+              pdf.url && pdf.url.length > FAST_BOOT_IMAGE_MAX_CHARS
+                ? ''
+                : pdf.url,
+          })),
+        };
+      });
     }
     if (patch.simulados && merged.simulados) {
       merged.simulados = merged.simulados.map((s) => ({
@@ -1212,6 +1313,20 @@ export default function App() {
               typeof data.restrictToStudentList === 'boolean'
                 ? data.restrictToStudentList
                 : true,
+            liveEnabled: Boolean(data.liveEnabled),
+            liveAutoSchedule: Boolean(data.liveAutoSchedule),
+            liveChannelId: data.liveChannelId || '',
+            liveTitle: data.liveTitle || '',
+            liveDescription: data.liveDescription || '',
+            liveYoutubeUrl: data.liveYoutubeUrl || '',
+            liveStartAt: data.liveStartAt || '',
+            liveEndAt: data.liveEndAt || '',
+            liveChatEnabled:
+              data.liveChatEnabled !== undefined
+                ? Boolean(data.liveChatEnabled)
+                : true,
+            liveIsFree: Boolean(data.liveIsFree),
+            livePdfs: Array.isArray(data.livePdfs) ? data.livePdfs : [],
             updatedBy: data.updatedBy || verifiedAuthUid,
           };
           setPlatformConfig(nextConfig);
@@ -1233,10 +1348,14 @@ export default function App() {
       coursesQuery,
       (snap) => {
         const list = sortByOrder(
-          snap.docs.map((d) => ({
-            ...(d.data() as Omit<Course, 'id'>),
-            id: d.id,
-          }))
+          snap.docs.map((d) => {
+            const raw = d.data() as Omit<Course, 'id'>;
+            return {
+              ...raw,
+              id: d.id,
+              coverUrl: resolveCachedCover(d.id, raw.coverUrl, 'preset:stadium'),
+            };
+          })
         );
         setCourses(list);
         setCoursesLoaded(true);
@@ -1256,10 +1375,14 @@ export default function App() {
       playlistsQuery,
       (snap) => {
         const list = sortByOrder(
-          snap.docs.map((d) => ({
-            ...(d.data() as Omit<Playlist, 'id'>),
-            id: d.id,
-          }))
+          snap.docs.map((d) => {
+            const raw = d.data() as Omit<Playlist, 'id'>;
+            return {
+              ...raw,
+              id: d.id,
+              coverUrl: resolveCachedCover(d.id, raw.coverUrl, 'preset:trophy'),
+            };
+          })
         );
         setPlaylists(list);
         setPlaylistsLoaded(true);
@@ -1740,26 +1863,65 @@ export default function App() {
             ? existingLesson.order
             : undefined;
 
-      await setDoc(ref, {
-        title: sanitizeString(payload.title, SCHEMA_LIMITS.TITLE_MAX, 'Aula'),
-        description: sanitizeString(
-          payload.description || '',
-          SCHEMA_LIMITS.LESSON_DESC_MAX,
-          ''
-        ),
+      const finalTitle = sanitizeString(
+        payload.title,
+        SCHEMA_LIMITS.TITLE_MAX,
+        'Aula'
+      );
+      const finalDescription = sanitizeString(
+        payload.description || '',
+        SCHEMA_LIMITS.LESSON_DESC_MAX,
+        ''
+      );
+      const finalDuration = sanitizeString(
+        payload.duration || '15:00',
+        20,
+        '15:00'
+      );
+      const finalThumb = sanitizeString(
+        payload.thumbnailUrl || 'preset:stadium',
+        SCHEMA_LIMITS.URL_MAX,
+        'preset:stadium'
+      );
+      const finalFolderId = sanitizeString(
+        payload.folderId ?? existingLesson?.folderId ?? '',
+        128,
+        ''
+      );
+      saveCoverInCacheMap(id, finalThumb);
+
+      const optimisticLesson: Lesson = {
+        id,
+        title: finalTitle,
+        description: finalDescription,
         youtubeId: payload.youtubeId || '',
-        duration: sanitizeString(payload.duration || '15:00', 20, '15:00'),
-        thumbnailUrl: sanitizeString(
-          payload.thumbnailUrl || 'preset:stadium',
-          SCHEMA_LIMITS.URL_MAX,
-          'preset:stadium'
-        ),
+        duration: finalDuration,
+        thumbnailUrl: finalThumb,
         pdfs: cleanPdfs,
-        folderId: sanitizeString(
-          payload.folderId ?? existingLesson?.folderId ?? '',
-          128,
-          ''
-        ),
+        folderId: finalFolderId,
+        ...(typeof resolvedOrder === 'number' ? { order: resolvedOrder } : {}),
+        isFree: isLessonFree,
+        isPublished: true,
+        authorId: activeUid,
+        createdAt: existingLesson?.createdAt || Timestamp.now(),
+        updatedAt: Timestamp.now(),
+      };
+      const nextLessons = sortByOrder(
+        existingLesson
+          ? lessons.map((l) => (l.id === id ? optimisticLesson : l))
+          : [...lessons, optimisticLesson]
+      );
+      setLessons(nextLessons);
+      saveFastBootCache({ lessons: nextLessons });
+
+      await setDoc(ref, {
+        title: finalTitle,
+        description: finalDescription,
+        youtubeId: payload.youtubeId || '',
+        duration: finalDuration,
+        thumbnailUrl: finalThumb,
+        pdfs: cleanPdfs,
+        folderId: finalFolderId,
         ...(typeof resolvedOrder === 'number' ? { order: resolvedOrder } : {}),
         isFree: isLessonFree,
         isPublished: true,
@@ -1832,15 +1994,37 @@ export default function App() {
 
   const handleDeleteLesson = async (lessonId: string) => {
     const activeUid = auth.currentUser?.uid || user?.uid;
+    const targetLesson = lessons.find((l) => l.id === lessonId);
+
+    // 1. Atualiza o estado do React otimisticamente
+    const nextLessons = lessons.filter((l) => l.id !== lessonId);
+    setLessons(nextLessons);
+    saveFastBootCache({ lessons: nextLessons });
+    if (selectedLessonId === lessonId) {
+      setSelectedLessonId(null);
+    }
+
+    // 2. Limpa arquivos PDF associados se existirem
+    if (targetLesson?.pdfs) {
+      for (const pdf of targetLesson.pdfs) {
+        if (pdf.url) {
+          void deletePdfFromFirestore(pdf.url);
+        }
+      }
+    }
+
+    // 3. Remove do Firestore
     try {
       await deleteDoc(doc(db, 'lessons', lessonId));
-      if (selectedLessonId === lessonId) {
-        setSelectedLessonId(null);
-      }
 
       for (const pl of playlists) {
-        if (pl.lessonIds.includes(lessonId)) {
+        if (pl.lessonIds?.includes(lessonId)) {
           const cleanedIds = pl.lessonIds.filter((id) => id !== lessonId);
+          const nextPlaylists = playlists.map((item) =>
+            item.id === pl.id ? { ...item, lessonIds: cleanedIds } : item
+          );
+          setPlaylists(nextPlaylists);
+          saveFastBootCache({ playlists: nextPlaylists });
           await setDoc(doc(db, 'playlists', pl.id), {
             title: pl.title,
             description: pl.description || '',
@@ -1875,9 +2059,27 @@ export default function App() {
           ? existingFolder.order
           : undefined;
 
+    const finalName = sanitizeString(payload.name, 120, 'Pasta');
+    const optimisticFolder: LessonFolder = {
+      id,
+      name: finalName,
+      ...(typeof resolvedOrder === 'number' ? { order: resolvedOrder } : {}),
+      isPublished: true,
+      authorId: activeUid,
+      createdAt: existingFolder?.createdAt || Timestamp.now(),
+      updatedAt: Timestamp.now(),
+    };
+    const nextFolders = sortByOrder(
+      existingFolder
+        ? lessonFolders.map((f) => (f.id === id ? optimisticFolder : f))
+        : [...lessonFolders, optimisticFolder]
+    );
+    setLessonFolders(nextFolders);
+    saveFastBootCache({ lessonFolders: nextFolders });
+
     try {
       await setDoc(ref, {
-        name: sanitizeString(payload.name, 120, 'Pasta'),
+        name: finalName,
         ...(typeof resolvedOrder === 'number' ? { order: resolvedOrder } : {}),
         isPublished: true,
         authorId: activeUid,
@@ -1897,10 +2099,21 @@ export default function App() {
 
   const handleDeleteLessonFolder = async (folderId: string) => {
     const activeUid = auth.currentUser?.uid || user?.uid;
-    if (!activeUid) return;
+    const nextFolders = lessonFolders.filter((f) => f.id !== folderId);
+    setLessonFolders(nextFolders);
+    saveFastBootCache({ lessonFolders: nextFolders });
+
+    const folderLessons = lessons.filter((l) => l.folderId === folderId);
+    if (folderLessons.length > 0) {
+      const nextLessons = lessons.map((l) =>
+        l.folderId === folderId ? { ...l, folderId: '' } : l
+      );
+      setLessons(nextLessons);
+      saveFastBootCache({ lessons: nextLessons });
+    }
+
     try {
       await deleteDoc(doc(db, 'lessonFolders', folderId));
-      const folderLessons = lessons.filter((l) => l.folderId === folderId);
       for (const lesson of folderLessons) {
         await setDoc(doc(db, 'lessons', lesson.id), {
           title: lesson.title,
@@ -1913,7 +2126,7 @@ export default function App() {
           ...(typeof lesson.order === 'number' ? { order: lesson.order } : {}),
           isFree: Boolean(lesson.isFree),
           isPublished: true,
-          authorId: activeUid,
+          authorId: activeUid || lesson.authorId || '',
           createdAt: toFirestoreTimestamp(lesson.createdAt),
           updatedAt: serverTimestamp(),
         });
@@ -1980,11 +2193,34 @@ export default function App() {
           ? existingPl.order
           : undefined;
 
+    const finalCoverUrl = payload.coverUrl || existingPl?.coverUrl || 'preset:trophy';
+    saveCoverInCacheMap(id, finalCoverUrl);
+
+    const optimisticPlaylist: Playlist = {
+      id,
+      title: payload.title,
+      description: payload.description || '',
+      coverUrl: finalCoverUrl,
+      lessonIds: cleanLessonIds,
+      ...(typeof resolvedOrder === 'number' ? { order: resolvedOrder } : {}),
+      isPublished: true,
+      authorId: activeUid,
+      createdAt: existingPl?.createdAt || Timestamp.now(),
+      updatedAt: Timestamp.now(),
+    };
+    const nextPlaylists = sortByOrder(
+      existingPl
+        ? playlists.map((p) => (p.id === id ? optimisticPlaylist : p))
+        : [...playlists, optimisticPlaylist]
+    );
+    setPlaylists(nextPlaylists);
+    saveFastBootCache({ playlists: nextPlaylists });
+
     try {
       await setDoc(ref, {
         title: payload.title,
         description: payload.description || '',
-        coverUrl: payload.coverUrl || 'preset:stadium',
+        coverUrl: finalCoverUrl,
         lessonIds: cleanLessonIds,
         ...(typeof resolvedOrder === 'number' ? { order: resolvedOrder } : {}),
         isPublished: true,
@@ -2005,28 +2241,26 @@ export default function App() {
 
   const handleDeletePlaylist = async (playlistId: string) => {
     const activeUid = auth.currentUser?.uid || user?.uid;
+    const nextPlaylists = playlists.filter((p) => p.id !== playlistId);
+    setPlaylists(nextPlaylists);
+    saveFastBootCache({ playlists: nextPlaylists });
+    if (selectedPlaylistId === playlistId) {
+      setSelectedPlaylistId(null);
+    }
+
     try {
       await deleteDoc(doc(db, 'playlists', playlistId));
-      if (selectedPlaylistId === playlistId) {
-        setSelectedPlaylistId(null);
-      }
-
       for (const c of courses) {
-        if (c.playlistIds.includes(playlistId)) {
+        if (c.playlistIds?.includes(playlistId)) {
           const cleanedPlIds = c.playlistIds.filter((id) => id !== playlistId);
-          await setDoc(doc(db, 'courses', c.id), {
-            title: c.title,
-            subtitle: c.subtitle || '',
-            description: c.description || '',
-            category: c.category || 'Destaques',
-            coverUrl: c.coverUrl || 'preset:stadium',
-            bannerUrl: c.bannerUrl || '',
+          const nextCourses = courses.map((item) =>
+            item.id === c.id ? { ...item, playlistIds: cleanedPlIds } : item
+          );
+          setCourses(nextCourses);
+          saveFastBootCache({ courses: nextCourses });
+          await updateDoc(doc(db, 'courses', c.id), {
             playlistIds: cleanedPlIds,
-            ...(typeof c.order === 'number' ? { order: c.order } : {}),
-            featured: Boolean(c.featured),
-            isPublished: true,
             authorId: activeUid || c.authorId || '',
-            createdAt: toFirestoreTimestamp(c.createdAt),
             updatedAt: serverTimestamp(),
           });
         }
@@ -2061,13 +2295,40 @@ export default function App() {
           ? existingCourse.order
           : undefined;
 
+    const finalCoverUrl = payload.coverUrl || existingCourse?.coverUrl || 'preset:stadium';
+    saveCoverInCacheMap(id, finalCoverUrl);
+
+    const optimisticCourse: Course = {
+      id,
+      title: payload.title,
+      subtitle: payload.subtitle || '',
+      description: payload.description || '',
+      category: payload.category || 'Destaques',
+      coverUrl: finalCoverUrl,
+      bannerUrl: payload.bannerUrl || '',
+      playlistIds: cleanPlaylistIds,
+      ...(typeof resolvedOrder === 'number' ? { order: resolvedOrder } : {}),
+      featured: Boolean(payload.featured),
+      isPublished: true,
+      authorId: activeUid,
+      createdAt: existingCourse?.createdAt || Timestamp.now(),
+      updatedAt: Timestamp.now(),
+    };
+    const nextCourses = sortByOrder(
+      existingCourse
+        ? courses.map((c) => (c.id === id ? optimisticCourse : c))
+        : [...courses, optimisticCourse]
+    );
+    setCourses(nextCourses);
+    saveFastBootCache({ courses: nextCourses });
+
     try {
       await setDoc(ref, {
         title: payload.title,
         subtitle: payload.subtitle || '',
         description: payload.description || '',
         category: payload.category || 'Destaques',
-        coverUrl: payload.coverUrl || 'preset:stadium',
+        coverUrl: finalCoverUrl,
         bannerUrl: payload.bannerUrl || '',
         playlistIds: cleanPlaylistIds,
         ...(typeof resolvedOrder === 'number' ? { order: resolvedOrder } : {}),
@@ -2089,11 +2350,15 @@ export default function App() {
   };
 
   const handleDeleteCourse = async (courseId: string) => {
+    const nextCourses = courses.filter((c) => c.id !== courseId);
+    setCourses(nextCourses);
+    saveFastBootCache({ courses: nextCourses });
+    if (selectedCourseId === courseId) {
+      setSelectedCourseId(null);
+    }
+
     try {
       await deleteDoc(doc(db, 'courses', courseId));
-      if (selectedCourseId === courseId) {
-        setSelectedCourseId(null);
-      }
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, `courses/${courseId}`);
     }
@@ -2119,19 +2384,9 @@ export default function App() {
         orderedCourseIds.map(async (cid, idx) => {
           const c = courses.find((item) => item.id === cid);
           if (!c) return;
-          await setDoc(doc(db, 'courses', c.id), {
-            title: sanitizeString(c.title, SCHEMA_LIMITS.TITLE_MAX, 'Curso'),
-            subtitle: sanitizeString(c.subtitle || '', SCHEMA_LIMITS.SUBTITLE_MAX, ''),
-            description: sanitizeString(c.description || '', SCHEMA_LIMITS.DESCRIPTION_MAX, ''),
-            category: sanitizeString(c.category || 'Destaques', SCHEMA_LIMITS.CATEGORY_MAX, 'Destaques'),
-            coverUrl: sanitizeString(c.coverUrl || 'preset:stadium', SCHEMA_LIMITS.URL_MAX, 'preset:stadium'),
-            bannerUrl: sanitizeString(c.bannerUrl || '', SCHEMA_LIMITS.URL_MAX, ''),
-            playlistIds: c.playlistIds || [],
+          await updateDoc(doc(db, 'courses', c.id), {
             order: idx,
-            featured: Boolean(c.featured),
-            isPublished: true,
             authorId: activeUid,
-            createdAt: toFirestoreTimestamp(c.createdAt),
             updatedAt: serverTimestamp(),
           });
         })
@@ -2161,15 +2416,9 @@ export default function App() {
         orderedPlaylistIds.map(async (pid, idx) => {
           const pl = playlists.find((item) => item.id === pid);
           if (!pl) return;
-          await setDoc(doc(db, 'playlists', pl.id), {
-            title: sanitizeString(pl.title, SCHEMA_LIMITS.TITLE_MAX, 'Playlist'),
-            description: sanitizeString(pl.description || '', SCHEMA_LIMITS.DESCRIPTION_MAX, ''),
-            coverUrl: sanitizeString(pl.coverUrl || 'preset:stadium', SCHEMA_LIMITS.URL_MAX, 'preset:stadium'),
-            lessonIds: pl.lessonIds || [],
+          await updateDoc(doc(db, 'playlists', pl.id), {
             order: idx,
-            isPublished: true,
             authorId: activeUid,
-            createdAt: toFirestoreTimestamp(pl.createdAt),
             updatedAt: serverTimestamp(),
           });
         })
@@ -2195,21 +2444,9 @@ export default function App() {
     saveFastBootCache({ courses: nextCourses });
 
     try {
-      await setDoc(doc(db, 'courses', targetCourse.id), {
-        title: sanitizeString(targetCourse.title, SCHEMA_LIMITS.TITLE_MAX, 'Curso'),
-        subtitle: sanitizeString(targetCourse.subtitle || '', SCHEMA_LIMITS.SUBTITLE_MAX, ''),
-        description: sanitizeString(targetCourse.description || '', SCHEMA_LIMITS.DESCRIPTION_MAX, ''),
-        category: sanitizeString(targetCourse.category || 'Destaques', SCHEMA_LIMITS.CATEGORY_MAX, 'Destaques'),
-        coverUrl: sanitizeString(targetCourse.coverUrl || 'preset:stadium', SCHEMA_LIMITS.URL_MAX, 'preset:stadium'),
-        bannerUrl: sanitizeString(targetCourse.bannerUrl || '', SCHEMA_LIMITS.URL_MAX, ''),
+      await updateDoc(doc(db, 'courses', targetCourse.id), {
         playlistIds: orderedPlaylistIds,
-        ...(typeof targetCourse.order === 'number'
-          ? { order: targetCourse.order }
-          : {}),
-        featured: Boolean(targetCourse.featured),
-        isPublished: true,
         authorId: activeUid,
-        createdAt: toFirestoreTimestamp(targetCourse.createdAt),
         updatedAt: serverTimestamp(),
       });
     } catch (err) {
@@ -2326,7 +2563,7 @@ export default function App() {
         ),
         description: sanitizeString(
           existingPl?.description || '',
-          SCHEMA_LIMITS.DESCRIPTION_MAX,
+          SCHEMA_LIMITS.PLAYLIST_DESC_MAX,
           ''
         ),
         coverUrl: sanitizeString(
@@ -2480,23 +2717,69 @@ export default function App() {
     simuladoData: Omit<Simulado, 'createdAt' | 'updatedAt'>,
     isNew: boolean
   ) => {
-    if (!user) return;
+    const activeUid = auth.currentUser?.uid || user?.uid;
+    if (!activeUid) return;
     const { id, answerKey, ...payload } = simuladoData;
     const ref = doc(db, 'simulados', id);
     const existingSim = simulados.find((s) => s.id === id);
 
     try {
-      await setDoc(ref, {
-        title: payload.title,
+      const normalizedPdfUrl = payload.pdfUrl
+        ? await ensurePdfUrlChunked(payload.pdfUrl, activeUid, false)
+        : '';
+
+      const finalTitle = sanitizeString(
+        payload.title,
+        SCHEMA_LIMITS.TITLE_MAX,
+        'Simulado'
+      );
+      const finalPdfUrl = sanitizeString(
+        normalizedPdfUrl,
+        SCHEMA_LIMITS.URL_MAX,
+        ''
+      );
+      const finalPdfTitle = finalPdfUrl
+        ? sanitizeString(
+            payload.pdfTitle || 'Simulado.pdf',
+            SCHEMA_LIMITS.TITLE_MAX,
+            'Simulado.pdf'
+          )
+        : '';
+
+      const optimisticSim: Simulado = {
+        id,
+        title: finalTitle,
         area: payload.area,
         questionCount: payload.questionCount,
         timeLimitMinutes: payload.timeLimitMinutes || 0,
-        pdfUrl: payload.pdfUrl || '',
-        pdfTitle: payload.pdfTitle || '',
+        pdfUrl: finalPdfUrl,
+        pdfTitle: finalPdfTitle,
+        answerKey: answerKey || existingSim?.answerKey || '',
         resultsReleased: Boolean(payload.resultsReleased),
         isPublished: true,
-        authorId: existingSim?.authorId || payload.authorId || user.uid,
-        createdAt: existingSim?.createdAt || serverTimestamp(),
+        authorId: activeUid,
+        createdAt: existingSim?.createdAt || Timestamp.now(),
+        updatedAt: Timestamp.now(),
+      };
+      const nextSims = existingSim
+        ? simulados.map((s) => (s.id === id ? optimisticSim : s))
+        : [...simulados, optimisticSim];
+      setSimulados(nextSims);
+      saveFastBootCache({ simulados: nextSims });
+
+      await setDoc(ref, {
+        title: finalTitle,
+        area: payload.area,
+        questionCount: payload.questionCount,
+        timeLimitMinutes: payload.timeLimitMinutes || 0,
+        pdfUrl: finalPdfUrl,
+        pdfTitle: finalPdfTitle,
+        resultsReleased: Boolean(payload.resultsReleased),
+        isPublished: true,
+        authorId: activeUid,
+        createdAt: isNew
+          ? serverTimestamp()
+          : toFirestoreTimestamp(existingSim?.createdAt),
         updatedAt: serverTimestamp(),
       });
 
@@ -2510,8 +2793,10 @@ export default function App() {
 
         await setDoc(keyRef, {
           answerKey: cleanKey,
-          authorId: existingKeyData?.authorId || user.uid,
-          createdAt: existingKeyData?.createdAt || serverTimestamp(),
+          authorId: activeUid,
+          createdAt: existingKeyData?.createdAt
+            ? toFirestoreTimestamp(existingKeyData.createdAt)
+            : serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
 
@@ -2530,6 +2815,15 @@ export default function App() {
   };
 
   const handleDeleteSimulado = async (simuladoId: string) => {
+    const targetSim = simulados.find((s) => s.id === simuladoId);
+    const nextSims = simulados.filter((s) => s.id !== simuladoId);
+    setSimulados(nextSims);
+    saveFastBootCache({ simulados: nextSims });
+
+    if (targetSim?.pdfUrl) {
+      void deletePdfFromFirestore(targetSim.pdfUrl);
+    }
+
     try {
       await deleteDoc(doc(db, 'simulados', simuladoId));
       await deleteDoc(doc(db, 'simuladoKeys', simuladoId)).catch(() => {});
@@ -2566,8 +2860,15 @@ export default function App() {
   };
 
   const handleToggleReleaseSimulado = async (simulado: Simulado) => {
-    if (!user) return;
+    const activeUid = auth.currentUser?.uid || user?.uid;
+    if (!activeUid) return;
     const ref = doc(db, 'simulados', simulado.id);
+    const nextSims = simulados.map((s) =>
+      s.id === simulado.id ? { ...s, resultsReleased: !s.resultsReleased } : s
+    );
+    setSimulados(nextSims);
+    saveFastBootCache({ simulados: nextSims });
+
     try {
       await setDoc(ref, {
         title: simulado.title,
@@ -2578,8 +2879,8 @@ export default function App() {
         pdfTitle: simulado.pdfTitle || '',
         resultsReleased: !simulado.resultsReleased,
         isPublished: true,
-        authorId: simulado.authorId || user.uid,
-        createdAt: simulado.createdAt || serverTimestamp(),
+        authorId: activeUid,
+        createdAt: toFirestoreTimestamp(simulado.createdAt),
         updatedAt: serverTimestamp(),
       });
     } catch (err) {
@@ -3046,30 +3347,31 @@ export default function App() {
 
   const confirmPendingDelete = async () => {
     if (!pendingDelete || isDeletingItem) return;
+    const current = pendingDelete;
     setIsDeletingItem(true);
+    setPendingDelete(null);
     try {
-      if (pendingDelete.type === 'lesson') {
-        await handleDeleteLesson(pendingDelete.id);
-      } else if (pendingDelete.type === 'lessonFolder') {
-        await handleDeleteLessonFolder(pendingDelete.id);
-      } else if (pendingDelete.type === 'playlist') {
-        await handleDeletePlaylist(pendingDelete.id);
-      } else if (pendingDelete.type === 'course') {
-        await handleDeleteCourse(pendingDelete.id);
-      } else if (pendingDelete.type === 'student') {
-        await handleDeleteStudent(pendingDelete.id);
-      } else if (pendingDelete.type === 'turma') {
-        await handleDeleteTurma(pendingDelete.id);
-      } else if (pendingDelete.type === 'simulado') {
-        await handleDeleteSimulado(pendingDelete.id);
-      } else if (pendingDelete.type === 'doubt') {
-        await handleDeleteDoubt(pendingDelete.id);
-      } else if (pendingDelete.type === 'doubtReply') {
-        await handleDeleteReply(pendingDelete.id);
-      } else if (pendingDelete.type === 'calendarEvent') {
-        await handleDeleteCalendarEvent(pendingDelete.id);
+      if (current.type === 'lesson') {
+        await handleDeleteLesson(current.id);
+      } else if (current.type === 'lessonFolder') {
+        await handleDeleteLessonFolder(current.id);
+      } else if (current.type === 'playlist') {
+        await handleDeletePlaylist(current.id);
+      } else if (current.type === 'course') {
+        await handleDeleteCourse(current.id);
+      } else if (current.type === 'student') {
+        await handleDeleteStudent(current.id);
+      } else if (current.type === 'turma') {
+        await handleDeleteTurma(current.id);
+      } else if (current.type === 'simulado') {
+        await handleDeleteSimulado(current.id);
+      } else if (current.type === 'doubt') {
+        await handleDeleteDoubt(current.id);
+      } else if (current.type === 'doubtReply') {
+        await handleDeleteReply(current.id);
+      } else if (current.type === 'calendarEvent') {
+        await handleDeleteCalendarEvent(current.id);
       }
-      setPendingDelete(null);
     } finally {
       setIsDeletingItem(false);
     }
@@ -3540,12 +3842,435 @@ export default function App() {
     recordWatchActivity(lesson.id, resolvedPlId, resolvedCourseId);
   };
 
+  const [isLiveClassroomOpen, setIsLiveClassroomOpen] = useState(false);
+  const [detectedLiveVideoId, setDetectedLiveVideoId] = useState('');
+  const [showLiveChat, setShowLiveChat] = useState(true);
+  const [liveClockMs, setLiveClockMs] = useState(() => Date.now());
+
+  // --- OBS-STYLE TOP GEAR LIVE CONFIGURATION MODAL STATE ---
+  const [isLiveConfigModalOpen, setIsLiveConfigModalOpen] = useState(false);
+  const [liveCfgChannelId, setLiveCfgChannelId] = useState('');
+  const [liveCfgYoutubeUrl, setLiveCfgYoutubeUrl] = useState('');
+  const [liveCfgTitle, setLiveCfgTitle] = useState('');
+  const [liveCfgDescription, setLiveCfgDescription] = useState('');
+  const [liveCfgIsFree, setLiveCfgIsFree] = useState(false);
+  const [liveCfgPdfs, setLiveCfgPdfs] = useState<PdfAttachment[]>([]);
+  const [isUploadingLivePdf, setIsUploadingLivePdf] = useState(false);
+  const [livePdfUploadProgress, setLivePdfUploadProgress] = useState(0);
+  const [isSavingLiveCfg, setIsSavingLiveCfg] = useState(false);
+  const [liveCfgFeedback, setLiveCfgFeedback] = useState<string | null>(null);
+  const [liveCfgError, setLiveCfgError] = useState<string | null>(null);
+
+  // --- NATIVE REAL-TIME LIVE CHAT MESSAGES STATE ---
+  const [liveChatMessages, setLiveChatMessages] = useState<LiveChatMessage[]>([]);
+  const [liveChatInput, setLiveChatInput] = useState('');
+  const [isSendingLiveChat, setIsSendingLiveChat] = useState(false);
+  const liveChatScrollRef = useRef<HTMLDivElement>(null);
+
+  const openLiveConfigModal = () => {
+    setLiveCfgChannelId(platformConfig.liveChannelId || '');
+    setLiveCfgYoutubeUrl(platformConfig.liveYoutubeUrl || '');
+    setLiveCfgTitle(platformConfig.liveTitle || '');
+    setLiveCfgDescription(platformConfig.liveDescription || '');
+    setLiveCfgIsFree(Boolean(platformConfig.liveIsFree));
+    setLiveCfgPdfs(platformConfig.livePdfs || []);
+    setLiveCfgError(null);
+    setLiveCfgFeedback(null);
+    setIsLiveConfigModalOpen(true);
+  };
+
+  useEffect(() => {
+    if (!platformConfig.liveAutoSchedule) return;
+    const timer = window.setInterval(() => {
+      setLiveClockMs(Date.now());
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [platformConfig.liveAutoSchedule]);
+
+  const effectiveLiveSource = useMemo(() => {
+    const specificUrl = (platformConfig.liveYoutubeUrl || '').trim();
+    if (specificUrl) return specificUrl;
+    return (platformConfig.liveChannelId || '').trim();
+  }, [platformConfig.liveYoutubeUrl, platformConfig.liveChannelId]);
+
+  const isPlatformLiveActive = useMemo(() => {
+    const extracted = extractYoutubeId(effectiveLiveSource);
+    if (!extracted) return false;
+
+    const canWatchLive =
+      isAdmin || !isBlockedUser || Boolean(platformConfig.liveIsFree);
+    if (!canWatchLive) return false;
+
+    if (platformConfig.liveEnabled) return true;
+
+    if (platformConfig.liveAutoSchedule) {
+      const startMs = platformConfig.liveStartAt
+        ? new Date(platformConfig.liveStartAt).getTime()
+        : NaN;
+      const endMs = platformConfig.liveEndAt
+        ? new Date(platformConfig.liveEndAt).getTime()
+        : NaN;
+
+      const afterStart = Number.isFinite(startMs) ? liveClockMs >= startMs : true;
+      const beforeEnd = Number.isFinite(endMs) ? liveClockMs <= endMs : true;
+      if (
+        (Number.isFinite(startMs) || Number.isFinite(endMs)) &&
+        afterStart &&
+        beforeEnd
+      ) {
+        return true;
+      }
+    }
+
+    return false;
+  }, [
+    effectiveLiveSource,
+    platformConfig.liveEnabled,
+    platformConfig.liveAutoSchedule,
+    platformConfig.liveStartAt,
+    platformConfig.liveEndAt,
+    platformConfig.liveIsFree,
+    isAdmin,
+    isBlockedUser,
+    liveClockMs,
+  ]);
+
+  // Subscribe to real-time student chat when Live Classroom is open
+  useEffect(() => {
+    if (!user || !verifiedAuthUid || !isLiveClassroomOpen) {
+      return;
+    }
+    const unsubLiveChat = onSnapshot(
+      collection(db, 'liveChatMessages'),
+      (snap) => {
+        const list = snap.docs
+          .map((d) => ({
+            ...(d.data() as Omit<LiveChatMessage, 'id'>),
+            id: d.id,
+          }))
+          .sort((a, b) => (a.createdAtMs || 0) - (b.createdAtMs || 0))
+          .slice(-200);
+        setLiveChatMessages(list);
+      },
+      (err) => handleFirestoreError(err, OperationType.LIST, 'liveChatMessages')
+    );
+    return () => unsubLiveChat();
+  }, [user, verifiedAuthUid, isLiveClassroomOpen]);
+
+  // Auto-scroll live chat to bottom when new messages arrive
+  useEffect(() => {
+    if (!isLiveClassroomOpen || !liveChatScrollRef.current) return;
+    const el = liveChatScrollRef.current;
+    el.scrollTop = el.scrollHeight;
+  }, [liveChatMessages.length, isLiveClassroomOpen, showLiveChat]);
+
+  const handleSendLiveChatMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || isSendingLiveChat) return;
+    const cleanText = liveChatInput.trim().slice(0, 500);
+    if (!cleanText) return;
+
+    setIsSendingLiveChat(true);
+    setLiveChatInput('');
+    const msgId = generateSafeId('lchat');
+    const resolvedAuthorName = sanitizeString(
+      myStudentRecord?.name ||
+        userProgress?.displayName ||
+        user.displayName ||
+        user.email?.split('@')[0] ||
+        'Aluno',
+      120,
+      'Aluno'
+    );
+    const resolvedAvatar = sanitizeString(user.photoURL || '', 2000, '');
+    const nowMs = Date.now();
+
+    const optimisticMsg: LiveChatMessage = {
+      id: msgId,
+      authorId: user.uid,
+      authorName: resolvedAuthorName,
+      authorPhotoUrl: resolvedAvatar,
+      isAdminAuthor: Boolean(isAdmin),
+      text: cleanText,
+      createdAtMs: nowMs,
+      createdAt: Timestamp.now(),
+    };
+    setLiveChatMessages((prev) => [...prev, optimisticMsg]);
+
+    try {
+      await setDoc(doc(db, 'liveChatMessages', msgId), {
+        authorId: user.uid,
+        authorName: resolvedAuthorName,
+        authorPhotoUrl: resolvedAvatar,
+        isAdminAuthor: Boolean(isAdmin),
+        text: cleanText,
+        createdAtMs: nowMs,
+        createdAt: serverTimestamp(),
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, `liveChatMessages/${msgId}`);
+    } finally {
+      setIsSendingLiveChat(false);
+    }
+  };
+
+  const handleDeleteLiveChatMessage = async (msgId: string) => {
+    setLiveChatMessages((prev) => prev.filter((m) => m.id !== msgId));
+    try {
+      await deleteDoc(doc(db, 'liveChatMessages', msgId));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `liveChatMessages/${msgId}`);
+    }
+  };
+
+  const handleClearAllLiveChatMessages = async () => {
+    if (!isAdmin || liveChatMessages.length === 0) return;
+    const toDelete = [...liveChatMessages];
+    setLiveChatMessages([]);
+    try {
+      await Promise.all(
+        toDelete.map((m) => deleteDoc(doc(db, 'liveChatMessages', m.id)))
+      );
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, 'liveChatMessages');
+    }
+  };
+
+  const handleUploadLivePdfFiles = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (files.length === 0 || !user) return;
+
+    setLiveCfgError(null);
+    setIsUploadingLivePdf(true);
+    setLivePdfUploadProgress(5);
+    try {
+      const uploadedAttachments: PdfAttachment[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const { pdfUrl, pdfTitle, sizeLabel } = await uploadPdfFileToCloud(
+          file,
+          user.uid,
+          (pct) => {
+            const overall = Math.round(
+              ((i + pct / 100) / files.length) * 100
+            );
+            setLivePdfUploadProgress(Math.max(5, Math.min(100, overall)));
+          },
+          Boolean(liveCfgIsFree)
+        );
+        uploadedAttachments.push({
+          id: generateSafeId('pdf'),
+          title: pdfTitle,
+          url: pdfUrl,
+          sizeLabel,
+        });
+      }
+      setLiveCfgPdfs((prev) =>
+        [...prev, ...uploadedAttachments].slice(0, SCHEMA_LIMITS.MAX_PDFS)
+      );
+    } catch (err) {
+      console.error('Erro ao enviar PDF da live:', err);
+      setLiveCfgError(
+        err instanceof Error
+          ? err.message
+          : 'Não foi possível enviar o PDF da live.'
+      );
+    } finally {
+      setIsUploadingLivePdf(false);
+      setLivePdfUploadProgress(0);
+    }
+  };
+
+  const handleRemoveLivePdf = (pdfToRemove: PdfAttachment) => {
+    setLiveCfgPdfs((prev) => prev.filter((p) => p.id !== pdfToRemove.id));
+    if (pdfToRemove.url) {
+      void deletePdfFromFirestore(pdfToRemove.url);
+    }
+  };
+
+  const saveLiveConfigInternal = async (
+    nextLiveEnabled: boolean,
+    openClassroomOnStart = false
+  ) => {
+    const activeUid = auth.currentUser?.uid || user?.uid;
+    if (!activeUid) return;
+    setLiveCfgError(null);
+    setLiveCfgFeedback(null);
+
+    const cleanChannel = liveCfgChannelId.trim();
+    const cleanUrl = liveCfgYoutubeUrl.trim();
+    const resolvedSource = cleanUrl || cleanChannel;
+    const extracted = extractYoutubeId(resolvedSource);
+
+    if (nextLiveEnabled && !extracted) {
+      setLiveCfgError(
+        'Informe o ID do Canal do YouTube (ex: UC...) ou o link da transmissão para iniciar a live.'
+      );
+      return;
+    }
+
+    setIsSavingLiveCfg(true);
+    try {
+      const normalizedLivePdfs = await normalizeLessonPdfsForSave(
+        liveCfgPdfs,
+        platformConfig.livePdfs,
+        activeUid,
+        Boolean(liveCfgIsFree)
+      );
+      setLiveCfgPdfs(normalizedLivePdfs);
+
+      const nextCfg: Omit<PlatformConfig, 'updatedAt'> = {
+        ...platformConfig,
+        brandName: sanitizeString(
+          platformConfig.brandName,
+          60,
+          'CURSO VÉRTICE'
+        ),
+        heroTitle: sanitizeString(
+          platformConfig.heroTitle,
+          140,
+          'Sua plataforma de cursos para Enem e vestibulares'
+        ),
+        heroSubtitle: sanitizeString(
+          platformConfig.heroSubtitle,
+          240,
+          'Especialista em física, química e matemática'
+        ),
+        heroCtaText: sanitizeString(
+          platformConfig.heroCtaText,
+          60,
+          'Confira agora!'
+        ),
+        heroBgUrl: sanitizeString(
+          platformConfig.heroBgUrl || '',
+          SCHEMA_LIMITS.URL_MAX,
+          ''
+        ),
+        restrictToStudentList: Boolean(platformConfig.restrictToStudentList),
+        liveEnabled: Boolean(nextLiveEnabled),
+        liveAutoSchedule: Boolean(platformConfig.liveAutoSchedule),
+        liveChannelId: sanitizeString(cleanChannel, 120, ''),
+        liveTitle: sanitizeString(
+          liveCfgTitle,
+          160,
+          'Transmissão Ao Vivo — Curso Vértice'
+        ),
+        liveDescription: sanitizeString(
+          liveCfgDescription,
+          SCHEMA_LIMITS.LESSON_DESC_MAX,
+          ''
+        ),
+        liveYoutubeUrl: sanitizeString(cleanUrl, 300, ''),
+        liveStartAt: sanitizeString(platformConfig.liveStartAt || '', 40, ''),
+        liveEndAt: sanitizeString(platformConfig.liveEndAt || '', 40, ''),
+        liveChatEnabled: true,
+        liveIsFree: Boolean(liveCfgIsFree),
+        livePdfs: normalizedLivePdfs,
+        updatedBy: activeUid,
+      };
+
+      await handleSaveConfig(nextCfg);
+
+      if (openClassroomOnStart && nextLiveEnabled) {
+        setIsLiveConfigModalOpen(false);
+        setActivePdf(null);
+        setDetectedLiveVideoId('');
+        setIsLiveClassroomOpen(true);
+      } else if (!nextLiveEnabled) {
+        setLiveCfgFeedback('Transmissão ao vivo encerrada.');
+      } else {
+        setLiveCfgFeedback('Configurações da live salvas!');
+      }
+    } finally {
+      setIsSavingLiveCfg(false);
+    }
+  };
+
+  const handleSaveLiveConfigToFolder = async () => {
+    if (!user || isSavingLiveCfg) return;
+    setLiveCfgError(null);
+    setLiveCfgFeedback(null);
+
+    const cleanTitle = liveCfgTitle.trim();
+    if (!cleanTitle) {
+      setLiveCfgError('Informe o nome da live antes de salvar na pasta Lives.');
+      return;
+    }
+    const resolvedSource =
+      liveCfgYoutubeUrl.trim() ||
+      detectedLiveVideoId ||
+      liveCfgChannelId.trim();
+    const extracted = extractYoutubeId(resolvedSource);
+    if (!extracted) {
+      setLiveCfgError(
+        'Informe o link da live ou o ID do canal para salvar a aula na pasta Lives.'
+      );
+      return;
+    }
+
+    setIsSavingLiveCfg(true);
+    try {
+      const existingLivesFolder = lessonFolders.find(
+        (f) =>
+          f.id === 'folder_lives' || f.name.trim().toLowerCase() === 'lives'
+      );
+      const targetFolderId = existingLivesFolder
+        ? existingLivesFolder.id
+        : 'folder_lives';
+
+      if (!existingLivesFolder) {
+        await handleSaveLessonFolder(
+          {
+            id: targetFolderId,
+            name: 'Lives',
+            isPublished: true,
+            authorId: user.uid,
+          },
+          true
+        );
+      }
+
+      const newLessonId = generateSafeId('lesson');
+      await handleSaveLesson(
+        {
+          id: newLessonId,
+          title: sanitizeString(cleanTitle, SCHEMA_LIMITS.TITLE_MAX, 'Live'),
+          description: sanitizeString(
+            liveCfgDescription,
+            SCHEMA_LIMITS.LESSON_DESC_MAX,
+            ''
+          ),
+          youtubeId: extracted,
+          duration: '60:00',
+          thumbnailUrl: 'preset:stadium',
+          pdfs: liveCfgPdfs.slice(0, SCHEMA_LIMITS.MAX_PDFS),
+          folderId: targetFolderId,
+          isFree: Boolean(liveCfgIsFree),
+          isPublished: true,
+          authorId: user.uid,
+        },
+        true
+      );
+
+      await saveLiveConfigInternal(Boolean(platformConfig.liveEnabled), false);
+      setLiveCfgFeedback(
+        'Live salva com PDFs e descrição na pasta "Lives"! Você já pode colocá-la em qualquer curso.'
+      );
+    } finally {
+      setIsSavingLiveCfg(false);
+    }
+  };
+
   const exitClassroom = useCallback(() => {
     flushPendingWatchProgress();
     setSelectedCourseId(null);
     setSelectedPlaylistId(null);
     setSelectedLessonId(null);
     setActivePdf(null);
+    setIsLiveClassroomOpen(false);
     setIsLessonsDropdownOpen(false);
     setIsSimuladoEditorOpen(false);
     setEditingSimuladoDirect(null);
@@ -4014,6 +4739,7 @@ export default function App() {
     activeNav === 'home' &&
     !activeLesson &&
     !activePdf &&
+    !isLiveClassroomOpen &&
     !selectedCourseId &&
     !selectedPlaylistId;
   const displayBrandName =
@@ -4216,23 +4942,42 @@ export default function App() {
           )}
         </nav>
 
-        <div className="flex items-center gap-2.5 shrink-0">
+        <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
           {isAdmin && (
-            <button
-              type="button"
-              onClick={() => {
-                exitClassroom();
-                setActiveNav('admin');
-              }}
-              className={`hidden md:flex px-4 py-2 rounded-full text-xs font-bold items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                activeNav === 'admin' && !activeLesson && !activePdf
-                  ? 'bg-contrast text-contrast-ink'
-                  : 'bg-brand hover:bg-brand-hover text-white shadow-glow-sm'
-              }`}
-            >
-              <Sliders className="w-3.5 h-3.5" />
-              Gerenciar
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={openLiveConfigModal}
+                title="Configurar e Iniciar Live no App (Estilo OBS)"
+                aria-label="Configurar Live no App"
+                className={`relative w-9 h-9 rounded-full border flex items-center justify-center transition-all cursor-pointer shrink-0 ${
+                  platformConfig.liveEnabled
+                    ? 'bg-rose-600/20 border-rose-500 text-rose-500 shadow-[0_0_16px_rgba(225,29,72,0.35)]'
+                    : 'bg-chip hover:bg-chip-hover border-line text-ink-2 hover:text-ink'
+                }`}
+              >
+                <Settings className="w-4 h-4" />
+                {platformConfig.liveEnabled && (
+                  <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-rose-500 border-2 border-canvas animate-pulse" />
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  exitClassroom();
+                  setActiveNav('admin');
+                }}
+                className={`hidden md:flex px-4 py-2 rounded-full text-xs font-bold items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  activeNav === 'admin' && !activeLesson && !activePdf
+                    ? 'bg-contrast text-contrast-ink'
+                    : 'bg-brand hover:bg-brand-hover text-white shadow-glow-sm'
+                }`}
+              >
+                <Sliders className="w-3.5 h-3.5" />
+                Gerenciar
+              </button>
+            </>
           )}
 
           <div ref={profileDropdownRef} className="relative">
@@ -4343,6 +5088,318 @@ export default function App() {
             />
           </React.Suspense>
         </main>
+      ) : isLiveClassroomOpen && effectiveLiveSource ? (
+        /* DEDICATED YOUTUBE LIVE CLASSROOM WINDOW WITH ANTI-SHARING & STUDENT CHAT */
+        <SafeErrorBoundary>
+          <main
+            onContextMenu={(e) => e.preventDefault()}
+            className="relative z-10 flex-1 w-full max-w-[1400px] mx-auto px-4 md:px-10 py-5 min-w-0 space-y-5 select-none"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-line">
+              <div className="flex flex-wrap items-center gap-2.5 min-w-0">
+                <button
+                  type="button"
+                  onClick={() => setIsLiveClassroomOpen(false)}
+                  className="h-9 px-3.5 rounded-xl bg-surface hover:bg-chip-hover border border-line text-xs font-semibold text-ink-2 hover:text-ink transition-colors shrink-0 inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5 text-brand-soft" />
+                  <span>Voltar</span>
+                </button>
+
+                <span className="px-2.5 py-1 rounded-full bg-rose-600 text-white text-[11px] font-extrabold uppercase tracking-wider inline-flex items-center gap-1.5 shrink-0 shadow-sm keep-white-text">
+                  <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
+                  <span>AO VIVO</span>
+                </span>
+
+                <span className="px-2.5 py-1 rounded-full bg-chip border border-line text-[11px] font-bold text-ink-2 shrink-0">
+                  {platformConfig.liveIsFree ? 'Público' : 'Não listado'}
+                </span>
+
+                <span
+                  title="Transmissão protegida com marca d'água nominal anti-compartilhamento"
+                  className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-500 text-[11px] font-bold shrink-0"
+                >
+                  <Shield className="w-3 h-3" />
+                  <span>Anti-Compartilhamento Ativo</span>
+                </span>
+
+                <h1 className="text-sm sm:text-base md:text-lg font-extrabold text-ink truncate">
+                  {platformConfig.liveTitle || 'Transmissão Ao Vivo — Curso Vértice'}
+                </h1>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={openLiveConfigModal}
+                    className="h-9 px-3.5 rounded-xl bg-surface hover:bg-chip-hover border border-line text-xs font-bold text-ink-2 hover:text-ink transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+                    title="Configurar Live (ID do Canal, Nome, Descrição e PDFs)"
+                  >
+                    <Settings className="w-3.5 h-3.5 text-brand-soft" />
+                    <span>Configurar Live</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setShowLiveChat((prev) => !prev)}
+                  className="h-9 px-3.5 rounded-xl bg-surface hover:bg-chip-hover border border-line text-xs font-semibold text-ink-2 hover:text-ink transition-colors inline-flex items-center gap-2 cursor-pointer shrink-0"
+                >
+                  <MessageCircle className="w-3.5 h-3.5 text-brand-soft" />
+                  <span>
+                    {showLiveChat ? 'Ocultar Chat' : 'Mostrar Chat dos Alunos'}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            <div
+              className={`grid grid-cols-1 ${
+                showLiveChat ? 'lg:grid-cols-12' : ''
+              } gap-5 items-start`}
+            >
+              {/* COLUNA PRINCIPAL: VÍDEO PROTEGIDO + DESCRIÇÃO + PDFs DA LIVE */}
+              <div
+                className={
+                  showLiveChat
+                    ? 'lg:col-span-8 w-full space-y-5'
+                    : 'w-full max-w-5xl mx-auto space-y-5'
+                }
+              >
+                <div className="w-full aspect-video relative shrink-0">
+                  <StealthVideoPlayer
+                    youtubeIdOrUrl={effectiveLiveSource}
+                    title={
+                      platformConfig.liveTitle ||
+                      'Transmissão Ao Vivo — Curso Vértice'
+                    }
+                    subtitle={displayBrandName}
+                    isLiveStream={true}
+                    onLiveVideoIdDetected={(vid) => setDetectedLiveVideoId(vid)}
+                    watermarkText={`${currentStudentWatermarkName} • CPF: ${currentStudentWatermarkCpf} • ${currentStudentWatermarkEmail}`}
+                    theaterMode={theaterMode}
+                    onToggleTheaterMode={() => setTheaterMode((prev) => !prev)}
+                  />
+                </div>
+
+                {/* TÍTULO E DESCRIÇÃO DA LIVE */}
+                <div className="p-4 sm:p-5 rounded-2xl bg-surface border border-line shadow-card space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h2 className="text-base sm:text-lg font-extrabold text-ink">
+                      {platformConfig.liveTitle ||
+                        'Transmissão Ao Vivo — Curso Vértice'}
+                    </h2>
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-ink-muted">
+                      <Shield className="w-3.5 h-3.5 text-emerald-500" />
+                      <span>
+                        Licenciado para: {currentStudentWatermarkName}
+                      </span>
+                    </span>
+                  </div>
+
+                  {platformConfig.liveDescription && (
+                    <p className="text-xs sm:text-sm text-ink-2 leading-relaxed whitespace-pre-line">
+                      {platformConfig.liveDescription}
+                    </p>
+                  )}
+                </div>
+
+                {/* MATERIAL EM PDF DIRETO NA LIVE */}
+                {platformConfig.livePdfs &&
+                  platformConfig.livePdfs.length > 0 && (
+                    <div className="space-y-3">
+                      <h3 className="text-sm font-bold text-ink flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-brand-soft" />
+                        <span>Material em PDF da Live</span>
+                      </h3>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {platformConfig.livePdfs.map((pdf) => (
+                          <div
+                            key={pdf.id}
+                            className="flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-surface border border-line hover:border-brand-soft/40 shadow-card transition-colors"
+                          >
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="w-10 h-10 rounded-xl bg-brand/15 border border-brand/30 text-brand-accent flex items-center justify-center shrink-0">
+                                <FileText className="w-5 h-5" />
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-xs font-bold text-ink truncate">
+                                  {pdf.title}
+                                </p>
+                                {pdf.sizeLabel && (
+                                  <span className="text-[10px] text-ink-muted">
+                                    {pdf.sizeLabel}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => setActivePdf(pdf)}
+                                className="px-3 py-1.5 rounded-lg bg-chip hover:bg-chip-hover text-xs font-semibold text-ink transition-colors cursor-pointer"
+                              >
+                                Ler
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  triggerPdfDownload(pdf.url, pdf.title)
+                                }
+                                className="p-2 rounded-lg bg-brand hover:bg-brand-hover text-white transition-colors cursor-pointer"
+                                title="Baixar PDF protegido"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+              </div>
+
+              {/* COLUNA LATERAL: CHAT DOS ALUNOS AO VIVO EM TEMPO REAL */}
+              {showLiveChat && (
+                <div className="lg:col-span-4 w-full h-[460px] lg:h-[540px] rounded-2xl bg-surface border border-line overflow-hidden flex flex-col shadow-card">
+                  <div className="px-4 py-3 bg-surface-2 border-b border-line flex items-center justify-between gap-2 shrink-0">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                      <span className="text-xs font-extrabold text-ink truncate">
+                        Chat dos Alunos Ao Vivo
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full bg-chip text-[10px] font-mono font-bold text-ink-2">
+                        {liveChatMessages.length}
+                      </span>
+                    </div>
+
+                    {isAdmin && liveChatMessages.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleClearAllLiveChatMessages}
+                        className="text-[11px] font-semibold text-ink-muted hover:text-rose-500 transition-colors cursor-pointer shrink-0"
+                        title="Limpar todas as mensagens do chat"
+                      >
+                        Limpar chat
+                      </button>
+                    )}
+                  </div>
+
+                  <div
+                    ref={liveChatScrollRef}
+                    className="flex-1 overflow-y-auto p-3.5 space-y-2.5"
+                  >
+                    {liveChatMessages.length === 0 ? (
+                      <div className="h-full flex flex-col items-center justify-center text-center px-4 space-y-1.5">
+                        <MessageCircle className="w-6 h-6 text-brand-soft/60" />
+                        <p className="text-xs font-bold text-ink-2">
+                          Chat da turma ao vivo
+                        </p>
+                        <p className="text-[11px] text-ink-muted">
+                          Envie sua dúvida ou mensagem abaixo para interagir em tempo real durante a aula.
+                        </p>
+                      </div>
+                    ) : (
+                      liveChatMessages.map((msg) => {
+                        const canRemove =
+                          isAdmin || msg.authorId === user.uid;
+                        const timeStr = new Date(
+                          msg.createdAtMs || Date.now()
+                        ).toLocaleTimeString('pt-BR', {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        });
+                        return (
+                          <div
+                            key={msg.id}
+                            className={`group flex items-start gap-2.5 p-2.5 rounded-xl border transition-colors ${
+                              msg.isAdminAuthor
+                                ? 'bg-brand/15 border-brand-soft/40'
+                                : 'bg-inset border-line-soft'
+                            }`}
+                          >
+                            {msg.authorPhotoUrl ? (
+                              <img
+                                src={msg.authorPhotoUrl}
+                                alt={msg.authorName}
+                                referrerPolicy="no-referrer"
+                                className="w-7 h-7 rounded-full object-cover shrink-0 mt-0.5"
+                              />
+                            ) : (
+                              <div className="w-7 h-7 rounded-full bg-brand text-white text-[11px] font-bold flex items-center justify-center shrink-0 mt-0.5 keep-white-text">
+                                {(msg.authorName || 'A')[0].toUpperCase()}
+                              </div>
+                            )}
+
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center justify-between gap-1.5">
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <span className="text-[11px] font-extrabold text-ink truncate">
+                                    {msg.authorName}
+                                  </span>
+                                  {msg.isAdminAuthor && (
+                                    <span className="px-1.5 py-0.2 rounded bg-brand text-white text-[9px] font-extrabold uppercase tracking-wider shrink-0 keep-white-text">
+                                      PROFESSOR
+                                    </span>
+                                  )}
+                                  <span className="text-[10px] font-mono text-ink-muted shrink-0">
+                                    {timeStr}
+                                  </span>
+                                </div>
+
+                                {canRemove && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleDeleteLiveChatMessage(msg.id)
+                                    }
+                                    className="opacity-0 group-hover:opacity-100 p-1 rounded text-ink-muted hover:text-rose-500 transition-opacity cursor-pointer shrink-0"
+                                    title="Apagar mensagem"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                )}
+                              </div>
+                              <p className="text-xs text-ink-2 break-words leading-snug mt-0.5 select-text">
+                                {msg.text}
+                              </p>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  <form
+                    onSubmit={handleSendLiveChatMessage}
+                    className="p-3 bg-surface-2 border-t border-line flex items-center gap-2 shrink-0"
+                  >
+                    <input
+                      type="text"
+                      maxLength={500}
+                      value={liveChatInput}
+                      onChange={(e) => setLiveChatInput(e.target.value)}
+                      placeholder="Digite sua mensagem no chat..."
+                      className="flex-1 px-3.5 py-2 rounded-xl bg-inset border border-line text-xs text-ink focus:outline-none focus:border-brand-soft"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!liveChatInput.trim() || isSendingLiveChat}
+                      className="h-9 px-3.5 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 disabled:opacity-40 transition-colors cursor-pointer shrink-0 keep-white-text"
+                      title="Enviar mensagem"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      <span>Enviar</span>
+                    </button>
+                  </form>
+                </div>
+              )}
+            </div>
+          </main>
+        </SafeErrorBoundary>
       ) : activeCourse && !selectedPlaylistId && !activeLesson ? (
         /* COURSE PLAYLISTS CARD VIEW */
         <main className="relative z-10 flex-1 w-full max-w-[1440px] mx-auto px-4 sm:px-8 md:px-14 lg:px-20 py-6 space-y-5">
@@ -4755,6 +5812,7 @@ export default function App() {
               }}
               onOpenNewLessonModal={openCreateLessonPopup}
               onOpenEditLessonModal={openEditLessonPopup}
+              onSaveLesson={handleSaveLesson}
               onDeleteLesson={requestDeleteLesson}
               onSaveLessonFolder={handleSaveLessonFolder}
               onDeleteLessonFolder={requestDeleteLessonFolder}
@@ -4839,6 +5897,53 @@ export default function App() {
           <div className="py-2 space-y-10">
             {activeNav === 'home' && (
               <>
+                {isPlatformLiveActive && (
+                  <section className="space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <h2 className="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-rose-500 flex items-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse" />
+                        <span>Transmissão Ao Vivo Agora</span>
+                      </h2>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActivePdf(null);
+                        setDetectedLiveVideoId('');
+                        setIsLiveClassroomOpen(true);
+                      }}
+                      className="w-full sm:max-w-2xl p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-rose-600/20 via-surface to-surface hover:from-rose-600/30 border border-rose-500/50 hover:border-rose-500 transition-all flex items-center justify-between gap-4 text-left group shadow-card cursor-pointer"
+                    >
+                      <div className="flex items-center gap-3.5 sm:gap-4 min-w-0">
+                        <div className="w-12 h-12 rounded-2xl bg-rose-600 text-white flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform shrink-0 keep-white-text">
+                          <Radio className="w-5 h-5 animate-pulse" />
+                        </div>
+
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="px-2 py-0.5 rounded-md bg-rose-600 text-white text-[10px] font-extrabold uppercase tracking-wider keep-white-text">
+                              AO VIVO
+                            </span>
+                            <span className="text-[11px] font-semibold text-ink-2 truncate">
+                              Clique para entrar na sala de transmissão
+                            </span>
+                          </div>
+                          <p className="text-sm sm:text-base font-extrabold text-ink truncate">
+                            {platformConfig.liveTitle ||
+                              'Aula Ao Vivo — Curso Vértice'}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="px-4 py-2 rounded-xl bg-rose-600 group-hover:bg-rose-500 text-white text-xs font-bold shrink-0 inline-flex items-center gap-1.5 transition-colors keep-white-text">
+                        <span>Assistir</span>
+                        <ChevronRight className="w-4 h-4" />
+                      </div>
+                    </button>
+                  </section>
+                )}
+
                 {continueWatchingData && (
                   <section className="space-y-2.5">
                     <div className="flex items-center justify-between gap-2">
@@ -5501,6 +6606,290 @@ export default function App() {
               >
                 Fechar
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* OBS-STYLE LIVE CONFIGURATION MODAL (OPENED BY TOP GEAR BUTTON) */}
+      {isAdmin && isLiveConfigModalOpen && (
+        <div
+          onClick={() => setIsLiveConfigModalOpen(false)}
+          className="fixed inset-0 z-[90] bg-black/75 backdrop-blur-sm flex items-center justify-center p-0 sm:p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full h-[100dvh] max-h-[100dvh] sm:h-auto sm:max-h-[90dvh] sm:max-w-xl rounded-none sm:rounded-3xl bg-surface border-0 sm:border border-line shadow-pop overflow-hidden flex flex-col"
+          >
+            <div className="px-5 py-4 border-b border-line flex items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-500 flex items-center justify-center shrink-0">
+                  <Settings className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-extrabold tracking-tight text-ink truncate">
+                      Configurar & Iniciar Live (Estilo OBS)
+                    </h2>
+                    {platformConfig.liveEnabled && (
+                      <span className="px-2 py-0.5 rounded-full bg-rose-600 text-white text-[10px] font-extrabold uppercase tracking-wider inline-flex items-center gap-1 shrink-0 keep-white-text">
+                        <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                        AO VIVO
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-ink-muted truncate">
+                    Configure ID do canal, título, descrição e PDFs com proteção anti-compartilhamento
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsLiveConfigModalOpen(false)}
+                className="w-9 h-9 rounded-xl text-ink-muted hover:text-ink hover:bg-chip-hover flex items-center justify-center transition-colors cursor-pointer shrink-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {/* VISIBILIDADE: NÃO LISTADO (PADRÃO) OU PÚBLICO */}
+              <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-2xl bg-inset border border-line">
+                <div>
+                  <span className="block text-xs font-bold text-ink">
+                    Modo da Transmissão
+                  </span>
+                  <span className="block text-[11px] text-ink-muted">
+                    Proteção anti-compartilhamento ativa na tela da live
+                  </span>
+                </div>
+
+                <div className="inline-flex p-1 rounded-xl bg-surface border border-line">
+                  <button
+                    type="button"
+                    onClick={() => setLiveCfgIsFree(false)}
+                    className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                      !liveCfgIsFree
+                        ? 'bg-brand text-white shadow-sm keep-white-text'
+                        : 'text-ink-muted hover:text-ink'
+                    }`}
+                  >
+                    Não listado
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLiveCfgIsFree(true)}
+                    className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                      liveCfgIsFree
+                        ? 'bg-brand text-white shadow-sm keep-white-text'
+                        : 'text-ink-muted hover:text-ink'
+                    }`}
+                  >
+                    Público
+                  </button>
+                </div>
+              </div>
+
+              {/* ID DO CANAL (COMO NO OBS) + LINK DA LIVE */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <div>
+                  <label className="block text-xs font-semibold text-ink-2 mb-1">
+                    ID do Canal YouTube (Fixo como no OBS)
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={120}
+                    value={liveCfgChannelId}
+                    onChange={(e) => {
+                      setLiveCfgChannelId(e.target.value);
+                      if (liveCfgError) setLiveCfgError(null);
+                    }}
+                    placeholder="Ex: UCxxxxxxxxxxxx"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-xs sm:text-sm text-ink focus:outline-none focus:border-brand-soft"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-ink-2 mb-1">
+                    Link da Live (Não listado / Específico)
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={300}
+                    value={liveCfgYoutubeUrl}
+                    onChange={(e) => {
+                      setLiveCfgYoutubeUrl(e.target.value);
+                      if (liveCfgError) setLiveCfgError(null);
+                    }}
+                    placeholder="https://youtube.com/live/..."
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-xs sm:text-sm text-ink focus:outline-none focus:border-brand-soft"
+                  />
+                </div>
+              </div>
+
+              {/* NOME DA LIVE */}
+              <div>
+                <label className="block text-xs font-semibold text-ink-2 mb-1">
+                  Nome da Live
+                </label>
+                <input
+                  type="text"
+                  maxLength={160}
+                  value={liveCfgTitle}
+                  onChange={(e) => {
+                    setLiveCfgTitle(e.target.value);
+                    if (liveCfgError) setLiveCfgError(null);
+                  }}
+                  placeholder="Ex: Revisão Geral de Física — Enem"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus:border-brand-soft"
+                />
+              </div>
+
+              {/* DESCRIÇÃO DA LIVE */}
+              <div>
+                <label className="block text-xs font-semibold text-ink-2 mb-1">
+                  Descrição da Live
+                </label>
+                <textarea
+                  rows={3}
+                  maxLength={SCHEMA_LIMITS.LESSON_DESC_MAX}
+                  value={liveCfgDescription}
+                  onChange={(e) => setLiveCfgDescription(e.target.value)}
+                  placeholder="Assuntos abordados na transmissão, avisos ou instruções para os alunos..."
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-xs sm:text-sm text-ink focus:outline-none focus:border-brand-soft resize-y"
+                />
+              </div>
+
+              {/* MATERIAL EM PDF DIRETO NA LIVE */}
+              <div className="p-3.5 rounded-2xl bg-inset border border-line space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <span className="block text-xs font-bold text-ink">
+                      Material em PDF da Live ({liveCfgPdfs.length})
+                    </span>
+                    <span className="block text-[11px] text-ink-muted">
+                      Os PDFs aparecem na tela da live com marca d&apos;água do aluno
+                    </span>
+                  </div>
+
+                  <label className="px-3.5 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition-colors shrink-0 keep-white-text">
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>
+                      {isUploadingLivePdf
+                        ? `Enviando ${livePdfUploadProgress}%`
+                        : 'Adicionar PDF'}
+                    </span>
+                    <input
+                      type="file"
+                      accept="application/pdf,.pdf"
+                      multiple
+                      disabled={isUploadingLivePdf}
+                      onChange={handleUploadLivePdfFiles}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+
+                {liveCfgPdfs.length > 0 && (
+                  <div className="space-y-1.5">
+                    {liveCfgPdfs.map((pdf) => (
+                      <div
+                        key={pdf.id}
+                        className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-surface border border-line text-xs"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <FileText className="w-4 h-4 text-brand-soft shrink-0" />
+                          <span className="font-semibold text-ink truncate">
+                            {pdf.title}
+                          </span>
+                          {pdf.sizeLabel && (
+                            <span className="text-[10px] text-ink-muted shrink-0">
+                              ({pdf.sizeLabel})
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveLivePdf(pdf)}
+                          className="p-1 rounded-lg text-ink-muted hover:text-rose-500 transition-colors cursor-pointer shrink-0"
+                          title="Remover PDF"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {liveCfgError && (
+                <UploadDiagnosticAlert
+                  error={liveCfgError}
+                  onDismiss={() => setLiveCfgError(null)}
+                />
+              )}
+
+              {liveCfgFeedback && (
+                <p className="text-xs font-bold text-emerald-500">
+                  {liveCfgFeedback}
+                </p>
+              )}
+            </div>
+
+            <div className="px-5 py-4 border-t border-line bg-surface-2 flex flex-wrap items-center justify-between gap-2.5 shrink-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={isSavingLiveCfg || isUploadingLivePdf}
+                  onClick={handleSaveLiveConfigToFolder}
+                  className="px-4 py-2.5 rounded-xl bg-chip hover:bg-chip-hover border border-line text-xs font-bold text-ink inline-flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <Folder className="w-3.5 h-3.5 text-brand-soft" />
+                  <span>Salvar na pasta Lives</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isSavingLiveCfg || isUploadingLivePdf}
+                  onClick={() =>
+                    saveLiveConfigInternal(
+                      Boolean(platformConfig.liveEnabled),
+                      false
+                    )
+                  }
+                  className="px-4 py-2.5 rounded-xl bg-chip hover:bg-chip-hover border border-line text-xs font-bold text-ink transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  Salvar Dados
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {platformConfig.liveEnabled && (
+                  <button
+                    type="button"
+                    disabled={isSavingLiveCfg || isUploadingLivePdf}
+                    onClick={() => saveLiveConfigInternal(false, false)}
+                    className="px-4 py-2.5 rounded-xl bg-surface hover:bg-rose-500/15 border border-rose-500/40 text-xs font-bold text-rose-500 transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    Encerrar Live
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  disabled={isSavingLiveCfg || isUploadingLivePdf}
+                  onClick={() => saveLiveConfigInternal(true, true)}
+                  className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-extrabold inline-flex items-center gap-2 shadow-[0_6px_20px_rgba(225,29,72,0.4)] transition-all cursor-pointer disabled:opacity-50 keep-white-text"
+                >
+                  <Radio className="w-4 h-4" />
+                  <span>
+                    {platformConfig.liveEnabled
+                      ? 'Ir para Sala Ao Vivo'
+                      : 'Iniciar Live no App'}
+                  </span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

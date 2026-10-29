@@ -15,47 +15,36 @@ export const CoverArtwork: React.FC<CoverArtworkProps> = React.memo(
     src,
     title,
     className = '',
-    showBottomPurpleBar = true,
     locked = false,
   }) => {
     const [imgError, setImgError] = useState(false);
-    const [imgLoaded, setImgLoaded] = useState(false);
 
     useEffect(() => {
       setImgError(false);
-      setImgLoaded(false);
     }, [src]);
 
+    const trimmedSrc = typeof src === 'string' ? src.trim() : '';
     const preset =
-      COVER_PRESETS.find((p) => p.id === src) ||
+      COVER_PRESETS.find((p) => p.id === trimmedSrc) ||
       COVER_PRESETS[Math.abs(hashString(title)) % COVER_PRESETS.length];
 
-    const isEmptySkeleton = src === '';
-    const isCustomUrl = Boolean(src && !src.startsWith('preset:') && !imgError);
+    const isCustomUrl = Boolean(
+      trimmedSrc && !trimmedSrc.startsWith('preset:') && !imgError
+    );
 
     return (
       <div
-        className={`cover-poster-dark relative overflow-hidden select-none ${
-          locked ? 'bg-zinc-700 grayscale saturate-0' : 'bg-[#0d1527]'
-        } ${className}`}
+        className={`cover-poster-dark relative overflow-hidden select-none bg-[#0d1527] ${className}`}
       >
-        {isEmptySkeleton ? (
-          <div className="w-full h-full bg-[#0d1527]" />
-        ) : isCustomUrl ? (
+        {isCustomUrl ? (
           <img
-            src={src}
+            src={trimmedSrc}
             alt={title}
-            loading="lazy"
             decoding="async"
             referrerPolicy="no-referrer"
-            onLoad={() => setImgLoaded(true)}
             onError={() => setImgError(true)}
-            className={`w-full h-full object-cover object-center transition-all duration-200 ${
-              imgLoaded ? 'opacity-100' : 'opacity-0'
-            } ${
-              locked
-                ? 'grayscale saturate-0 brightness-90 contrast-90 opacity-85'
-                : 'group-hover:scale-105'
+            className={`w-full h-full object-cover object-center transition-transform duration-500 ${
+              locked ? 'opacity-80' : 'group-hover:scale-105'
             }`}
           />
         ) : (
@@ -207,20 +196,11 @@ export const CoverArtwork: React.FC<CoverArtworkProps> = React.memo(
           </div>
         )}
 
-        {/* Measured contrast scrim + bottom bar */}
+        {/* Degradê apenas na parte de baixo para que o nome apareça bem */}
         <div
-          className={`absolute inset-0 bg-gradient-to-t ${
-            locked
-              ? 'from-zinc-900/90 via-zinc-800/45 to-zinc-700/15'
-              : 'from-[#070b14] via-[#070b14]/40 to-transparent'
-          } pointer-events-none`}
+          className="absolute inset-x-0 bottom-0 h-28 bg-gradient-to-t from-black/90 via-black/45 to-transparent pointer-events-none"
+          aria-hidden="true"
         />
-        {showBottomPurpleBar && !locked && (
-          <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-[#2563eb]/80 via-[#2563eb]/30 to-transparent pointer-events-none" />
-        )}
-        {locked && (
-          <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-zinc-900/95 via-zinc-800/60 to-transparent pointer-events-none" />
-        )}
       </div>
     );
   }

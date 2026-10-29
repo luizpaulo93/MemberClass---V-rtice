@@ -1,15 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   X,
+  Upload,
   Trash2,
   FileText,
-  Upload,
-  Folder,
   ArrowUp,
   ArrowDown,
+  Folder,
+  HelpCircle,
 } from 'lucide-react';
-import { doc, getDoc } from 'firebase/firestore';
-import { auth, db } from '../firebase';
 import {
   Lesson,
   LessonFolder,
@@ -20,13 +19,12 @@ import {
   extractYoutubeId,
   hasLessonVideo,
 } from '../types';
-import { CoverArtwork } from './CoverArtwork';
 import {
+  deletePdfFromFirestore,
   ensurePdfUrlChunked,
-  runWithConcurrency,
   uploadPdfFileToCloud,
 } from '../utils/pdfStorage';
-import { compressImageToDataUrl } from '../utils/imageCompress';
+import { UploadDiagnosticAlert } from './UploadDiagnosticAlert';
 
 interface LessonPopupModalProps {
   isOpen: boolean;
@@ -34,12 +32,13 @@ interface LessonPopupModalProps {
   defaultIsFree?: boolean;
   defaultFolderId?: string;
   folders?: LessonFolder[];
+  lessonFolders?: LessonFolder[];
+  currentUserUid: string;
   onClose: () => void;
   onSaveLesson: (
     lesson: Omit<Lesson, 'createdAt' | 'updatedAt'>,
     isNew: boolean
   ) => Promise<void>;
-  currentUserUid: string;
 }
 
 export const LessonPopupModal: React.FC<LessonPopupModalProps> = ({
@@ -47,26 +46,98 @@ export const LessonPopupModal: React.FC<LessonPopupModalProps> = ({
   editingLesson,
   defaultIsFree = false,
   defaultFolderId = '',
-  folders = [],
+  folders,
+  lessonFolders: lessonFoldersProp,
+  currentUserUid,
   onClose,
   onSaveLesson,
-  currentUserUid,
 }) => {
+  const lessonFolders = folders || lessonFoldersProp || [];
   const [title, setTitle] = useState('');
-  const [titleError, setTitleError] = useState(false);
-  const [youtubeInput, setYoutubeInput] = useState('');
   const [description, setDescription] = useState('');
-  const [thumbnailUrl, setThumbnailUrl] = useState('preset:stadium');
+  const [youtubeInput, setYoutubeInput] = useState('');
   const [pdfs, setPdfs] = useState<PdfAttachment[]>([]);
   const [folderId, setFolderId] = useState<string>('');
-  const [uploadingImg, setUploadingImg] = useState(false);
+  const [isFree, setIsFree] = useState(false);
+
   const [uploadingPdf, setUploadingPdf] = useState(false);
-  const [pdfUploadPct, setPdfUploadPct] = useState(0);
-  const [pdfError, setPdfError] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const pdfInputRef = useRef<HTMLInputElement>(null);
+
   const titleInputRef = useRef<HTMLInputElement>(null);
-  const initializedKeyRef = useRef<string>('');
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setUploadError(null);
+    setUploadProgress(0);
+    if (editingLesson) {
+      setTitle(editingLesson.title || '');
+      setDescription(editingLesson.description || '');
+      setYoutubeInput(
+        hasLessonVideo(editingLesson.youtubeId) ? editingLesson.youtubeId : ''
+      );
+      setPdfs(editingLesson.pdfs || []);
+      setFolderId(editingLesson.folderId || '');
+      setIsFree(Boolean(editingLesson.isFree));
+    } else {
+      setTitle('');
+      setDescription('');
+      setYoutubeInput('');
+      setPdfs([]);
+      setFolderId(defaultFolderId || '');
+      setIsFree(Boolean(defaultIsFree));
+    }
+  }, [isOpen, editingLesson, defaultIsFree, defaultFolderId]);
+
+  if (!isOpen) return null;
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    setUploadError(null);
+    if (pdfs.length >= SCHEMA_LIMITS.MAX_PDFS) {
+      setUploadError(
+        `Limite máximo de ${SCHEMA_LIMITS.MAX_PDFS} PDFs por aula atingido.`
+      );
+      return;
+    }
+
+    setUploadingPdf(true);
+    setUploadProgress(2);
+
+    try {
+      const { pdfUrl, pdfTitle, sizeLabel } = await uploadPdfFileToCloud(
+        file,
+        currentUserUid,
+        (pct) => setUploadProgress(pct),
+        isFree
+      );
+      setPdfs((prev) =>
+        [
+          ...prev,
+          {
+            id: generateSafeId('pdf'),
+            title: pdfTitle,
+            url: pdfUrl,
+            sizeLabel,
+          },
+        ].slice(0, SCHEMA_LIMITS.MAX_PDFS)
+      );
+      setTitle((prevTitle) => (prevTitle.trim() ? prevTitle : pdfTitle));
+    } catch (err) {
+      const msg =
+        err instanceof Error && err.message
+          ? err.message
+          : 'Não foi possível enviar o arquivo PDF. Tente novamente.';
+      setUploadError(msg);
+    } finally {
+      setUploadingPdf(false);
+      setUploadProgress(0);
+    }
+  };
 
   const movePdf = (index: number, direction: 'up' | 'down') => {
     setPdfs((prev) => {
@@ -79,230 +150,66 @@ export const LessonPopupModal: React.FC<LessonPopupModalProps> = ({
     });
   };
 
-  useEffect(() => {
-    if (!isOpen) {
-      initializedKeyRef.current = '';
-      return;
-    }
-    const modalKey = `${editingLesson ? editingLesson.id : 'new'}:${defaultFolderId || ''}`;
-    if (initializedKeyRef.current === modalKey) {
-      return;
-    }
-    initializedKeyRef.current = modalKey;
-
-    setPdfError(null);
-    setTitleError(false);
-    if (editingLesson) {
-      setTitle(editingLesson.title);
-      setYoutubeInput(
-        hasLessonVideo(editingLesson.youtubeId)
-          ? `https://youtu.be/${editingLesson.youtubeId}`
-          : ''
-      );
-      setDescription(editingLesson.description || '');
-      setThumbnailUrl(editingLesson.thumbnailUrl || 'preset:stadium');
-      const initialPdfs = Array.isArray(editingLesson.pdfs)
-        ? editingLesson.pdfs
-        : [];
-      setPdfs(initialPdfs);
-      setFolderId(editingLesson.folderId || defaultFolderId || '');
-
-      // Se algum PDF veio do cache local com URL vazia, busca a versão completa no Firestore
-      if (initialPdfs.some((p) => !p.url)) {
-        const lessonId = editingLesson.id;
-        getDoc(doc(db, 'lessons', lessonId))
-          .then((snap) => {
-            if (!snap.exists()) return;
-            const data = snap.data() as Partial<Lesson>;
-            const remotePdfs = Array.isArray(data.pdfs) ? data.pdfs : [];
-            if (remotePdfs.length === 0) return;
-            const remoteById = new Map(remotePdfs.map((p) => [p.id, p]));
-            setPdfs((prev) =>
-              prev.map((p) => {
-                if (p.url) return p;
-                const found = remoteById.get(p.id);
-                return found && found.url ? { ...p, url: found.url } : p;
-              })
-            );
-          })
-          .catch(() => {
-            // ignore offline error
-          });
+  const removePdf = (index: number) => {
+    setPdfs((prev) => {
+      const target = prev[index];
+      if (target?.url && target.url.startsWith('chunked:')) {
+        void deletePdfFromFirestore(target.url);
       }
-    } else {
-      setTitle('');
-      setYoutubeInput('');
-      setDescription('');
-      setThumbnailUrl('preset:stadium');
-      setPdfs([]);
-      setFolderId(defaultFolderId || '');
-    }
-  }, [isOpen, editingLesson, defaultFolderId]);
-
-  if (!isOpen) return null;
-
-  const handleImageFileUpload = async (
-    e: React.ChangeEvent<HTMLInputElement>
-  ) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploadingImg(true);
-    try {
-      const dataUrl = await compressImageToDataUrl(file, 640, 0.8);
-      setThumbnailUrl(dataUrl);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setUploadingImg(false);
-      e.target.value = '';
-    }
+      return prev.filter((_, idx) => idx !== index);
+    });
   };
 
-  const handleUploadLocalPdf = async (
-    e: React.ChangeEvent<HTMLInputElement>
-  ) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    const selectedFiles = Array.from(files);
-    e.target.value = '';
-    setPdfError(null);
-
-    if (pdfs.length >= SCHEMA_LIMITS.MAX_PDFS) {
-      setPdfError(
-        `Limite máximo de ${SCHEMA_LIMITS.MAX_PDFS} PDFs por aula atingido.`
-      );
-      return;
-    }
-
-    const remainingSlots = Math.max(0, SCHEMA_LIMITS.MAX_PDFS - pdfs.length);
-    const filesToUpload = selectedFiles.slice(0, remainingSlots);
-    const skippedCount = selectedFiles.length - filesToUpload.length;
-
-    setUploadingPdf(true);
-    setPdfUploadPct(1);
-    const isLessonFree = editingLesson
-      ? Boolean(editingLesson.isFree)
-      : Boolean(defaultIsFree);
-    const activeUid = auth.currentUser?.uid || currentUserUid;
-
-    const progressByFile = new Array<number>(filesToUpload.length).fill(0);
-    const resultsByIndex = new Array<PdfAttachment | null>(
-      filesToUpload.length
-    ).fill(null);
-    const failedNames: string[] = [];
-
-    const updateOverallProgress = () => {
-      const sum = progressByFile.reduce((acc, val) => acc + val, 0);
-      const avg = Math.round(sum / filesToUpload.length);
-      setPdfUploadPct(Math.max(1, Math.min(100, avg)));
-    };
-
-    try {
-      await runWithConcurrency(filesToUpload, 3, async (file, index) => {
-        try {
-          const uploaded = await uploadPdfFileToCloud(
-            file,
-            activeUid,
-            (pct) => {
-              progressByFile[index] = pct;
-              updateOverallProgress();
-            },
-            isLessonFree
-          );
-          progressByFile[index] = 100;
-          updateOverallProgress();
-          resultsByIndex[index] = {
-            id: generateSafeId('pdf'),
-            title: sanitizeString(
-              uploaded.pdfTitle,
-              SCHEMA_LIMITS.TITLE_MAX,
-              'Material PDF'
-            ),
-            url: uploaded.pdfUrl,
-            sizeLabel: sanitizeString(uploaded.sizeLabel, 40, 'PDF'),
-          };
-        } catch (err) {
-          console.error(`Erro ao enviar PDF "${file.name}":`, err);
-          progressByFile[index] = 100;
-          updateOverallProgress();
-          failedNames.push(file.name);
-        }
-      });
-
-      const uploadedItems = resultsByIndex.filter(
-        (item): item is PdfAttachment => item !== null
-      );
-      if (uploadedItems.length > 0) {
-        setPdfs((prev) =>
-          [...prev, ...uploadedItems].slice(0, SCHEMA_LIMITS.MAX_PDFS)
-        );
-      }
-
-      if (failedNames.length > 0) {
-        setPdfError(
-          `${failedNames.length} arquivo(s) não puderam ser enviados: ${failedNames.join(', ')}`
-        );
-      } else if (skippedCount > 0) {
-        setPdfError(
-          `Limite de ${SCHEMA_LIMITS.MAX_PDFS} PDFs por aula respeitado (${skippedCount} arquivo(s) excedente(s) ignorado(s)).`
-        );
-      }
-    } finally {
-      setUploadingPdf(false);
-      setPdfUploadPct(0);
-    }
+  const updatePdfTitle = (index: number, nextTitle: string) => {
+    setPdfs((prev) =>
+      prev.map((item, idx) =>
+        idx === index ? { ...item, title: nextTitle } : item
+      )
+    );
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (uploadingPdf || isSaving) return;
+    setUploadError(null);
+
     if (!title.trim()) {
-      setTitleError(true);
+      setUploadError('Informe o nome da aula antes de salvar.');
       titleInputRef.current?.focus();
       return;
     }
-    setPdfError(null);
+
+    const ytId = youtubeInput.trim() ? extractYoutubeId(youtubeInput) : '';
+    const validPdfs = pdfs
+      .filter((p) => p.title.trim() && p.url.trim())
+      .slice(0, SCHEMA_LIMITS.MAX_PDFS);
+
+    if (!ytId && validPdfs.length === 0) {
+      setUploadError(
+        'Adicione pelo menos um vídeo do YouTube ou um material em PDF.'
+      );
+      return;
+    }
+
     setIsSaving(true);
     try {
       const isNew = !editingLesson;
       const id = editingLesson?.id || generateSafeId('lesson');
-      const isLessonFree = editingLesson
-        ? Boolean(editingLesson.isFree)
-        : Boolean(defaultIsFree);
-      const activeUid = auth.currentUser?.uid || currentUserUid;
 
-      const validPdfs = pdfs
-        .slice(0, SCHEMA_LIMITS.MAX_PDFS)
-        .filter((p) => p && p.url && p.url.trim());
-
-      // Se a soma dos PDFs inline (data:) + capa ultrapassar 500 KB, migra os inline para pdfChunks
-      // para nunca estourar o limite de 1 MB do documento da aula no Firestore.
-      const totalInlineChars =
-        validPdfs.reduce(
-          (acc, p) => acc + (p.url.startsWith('data:') ? p.url.length : 0),
-          0
-        ) + (thumbnailUrl.startsWith('data:') ? thumbnailUrl.length : 0);
-      const shouldChunkInlinePdfs =
-        validPdfs.length > 1 && totalInlineChars > 500_000;
-
-      const normalizedPdfs: PdfAttachment[] = [];
+      const finalPdfs: PdfAttachment[] = [];
       for (const p of validPdfs) {
-        const finalUrl = shouldChunkInlinePdfs
-          ? await ensurePdfUrlChunked(p.url.trim(), activeUid, isLessonFree)
-          : p.url.trim();
-        if (!finalUrl) continue;
-        normalizedPdfs.push({
-          id: sanitizeString(
-            p.id || generateSafeId('pdf'),
-            SCHEMA_LIMITS.ID_MAX,
-            generateSafeId('pdf')
-          ),
+        const normalizedUrl = await ensurePdfUrlChunked(
+          p.url.trim(),
+          currentUserUid,
+          Boolean(isFree)
+        );
+        finalPdfs.push({
+          id: p.id || generateSafeId('pdf'),
           title: sanitizeString(
             p.title,
             SCHEMA_LIMITS.TITLE_MAX,
             'Material PDF'
           ),
-          url: sanitizeString(finalUrl, SCHEMA_LIMITS.PDF_URL_MAX, ''),
+          url: sanitizeString(normalizedUrl, SCHEMA_LIMITS.PDF_URL_MAX, ''),
           sizeLabel: sanitizeString(p.sizeLabel, 40, 'PDF'),
         });
       }
@@ -316,58 +223,53 @@ export const LessonPopupModal: React.FC<LessonPopupModalProps> = ({
             SCHEMA_LIMITS.LESSON_DESC_MAX,
             ''
           ),
-          youtubeId: extractYoutubeId(youtubeInput),
+          youtubeId: ytId,
           duration: editingLesson?.duration || '15:00',
-          thumbnailUrl: sanitizeString(
-            thumbnailUrl.trim() || 'preset:stadium',
-            SCHEMA_LIMITS.URL_MAX,
-            'preset:stadium'
-          ),
-          pdfs: normalizedPdfs,
+          thumbnailUrl: editingLesson?.thumbnailUrl || 'preset:stadium',
+          pdfs: finalPdfs,
           folderId: sanitizeString(folderId, 128, ''),
           ...(typeof editingLesson?.order === 'number'
             ? { order: editingLesson.order }
             : {}),
-          isFree: isLessonFree,
+          isFree: Boolean(isFree),
           isPublished: true,
-          authorId: activeUid,
+          authorId: currentUserUid,
         },
         isNew
       );
       onClose();
     } catch (err) {
       console.error('Erro ao salvar aula:', err);
-      setPdfError('Não foi possível salvar a aula. Tente novamente.');
+      setUploadError(
+        err instanceof Error && err.message
+          ? err.message
+          : 'Erro ao salvar a aula. Tente novamente.'
+      );
     } finally {
       setIsSaving(false);
     }
   };
 
-  const activeFolderObj = folders.find((f) => f.id === folderId);
-
   return (
-    <div className="fixed inset-0 z-[90] bg-black/75 backdrop-blur-sm flex items-center justify-center p-0 sm:p-4">
-      <div className="bg-surface border-0 sm:border border-line h-[100dvh] max-h-[100dvh] w-full rounded-none sm:h-auto sm:max-h-[90dvh] sm:rounded-3xl max-w-lg flex flex-col overflow-hidden shadow-pop">
-        <div className="shrink-0 flex items-center justify-between px-5 pt-[max(1rem,env(safe-area-inset-top))] sm:pt-4 pb-4 border-b border-line">
-          <div className="min-w-0">
-            <h3 className="text-sm font-bold text-ink truncate">
-              {editingLesson
-                ? 'Editar Aula'
-                : defaultIsFree
-                  ? 'Criar Aula Gratuita'
-                  : 'Criar Aula'}
-            </h3>
-            {activeFolderObj && (
-              <p className="text-xs text-accent-300 font-medium flex items-center gap-1 mt-0.5 truncate">
-                <Folder className="w-3.5 h-3.5 shrink-0" />
-                <span>Pasta: {activeFolderObj.name}</span>
-              </p>
-            )}
-          </div>
+    <div
+      onClick={() => {
+        if (!uploadingPdf && !isSaving) onClose();
+      }}
+      className="fixed inset-0 z-[80] bg-black/75 backdrop-blur-sm flex items-center justify-center p-0 sm:p-4 overflow-y-auto"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="h-[100dvh] max-h-[100dvh] w-full rounded-none sm:h-auto sm:max-h-[92dvh] sm:rounded-2xl max-w-xl bg-surface border-0 sm:border border-line shadow-pop overflow-hidden flex flex-col my-auto"
+      >
+        <div className="px-6 py-4 border-b border-line flex items-center justify-between shrink-0">
+          <h3 className="text-base font-bold text-ink">
+            {editingLesson ? 'Editar Aula' : 'Nova Aula'}
+          </h3>
           <button
             type="button"
+            disabled={uploadingPdf || isSaving}
             onClick={onClose}
-            className="min-w-10 min-h-10 p-2 rounded-xl text-ink-muted hover:text-ink hover:bg-chip flex items-center justify-center transition-colors cursor-pointer"
+            className="p-1.5 rounded-lg text-ink-muted hover:text-ink hover:bg-chip-hover transition-colors disabled:opacity-40 cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -376,245 +278,227 @@ export const LessonPopupModal: React.FC<LessonPopupModalProps> = ({
         <form
           noValidate
           onSubmit={handleSubmit}
-          className="flex-1 flex flex-col min-h-0"
+          className="p-6 space-y-4 overflow-y-auto flex-1"
         >
-          <div className="flex-1 p-5 overflow-y-auto space-y-4">
-            {folders.length > 0 && (
-              <div>
-                <label className="block text-xs font-medium text-ink-2 mb-1.5">
-                  Pasta da aula
-                </label>
+          <div>
+            <label className="block text-xs font-medium text-ink-2 mb-1.5">
+              Nome da Aula
+            </label>
+            <input
+              ref={titleInputRef}
+              type="text"
+              maxLength={SCHEMA_LIMITS.TITLE_MAX}
+              value={title}
+              onChange={(e) => {
+                setTitle(e.target.value);
+                if (uploadError) setUploadError(null);
+              }}
+              placeholder="Ex: Aula 01 — Cinemática Escalar"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-ink-2 mb-1.5">
+              Link ou ID do Vídeo no YouTube (Opcional se tiver PDF)
+            </label>
+            <input
+              type="text"
+              value={youtubeInput}
+              onChange={(e) => {
+                setYoutubeInput(e.target.value);
+                if (uploadError) setUploadError(null);
+              }}
+              placeholder="Cole a URL do YouTube ou deixe em branco para aula só com PDF"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft font-mono"
+            />
+          </div>
+
+          {lessonFolders.length > 0 && (
+            <div>
+              <label className="block text-xs font-medium text-ink-2 mb-1.5">
+                Pasta da Aula (Opcional)
+              </label>
+              <div className="relative">
+                <Folder className="w-4 h-4 text-ink-muted absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <select
                   value={folderId}
                   onChange={(e) => setFolderId(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-xs font-semibold text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
+                  className="w-full pl-10 pr-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                 >
-                  <option value="">Sem pasta</option>
-                  {folders.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.name}
+                  <option value="">Sem pasta (Geral)</option>
+                  {lessonFolders.map((folder) => (
+                    <option key={folder.id} value={folder.id}>
+                      {folder.name}
                     </option>
                   ))}
                 </select>
               </div>
-            )}
-
-            {/* 1. Nome da Aula */}
-            <div>
-              <label className="block text-xs font-medium text-ink-2 mb-1.5">
-                Nome da aula
-              </label>
-              <input
-                ref={titleInputRef}
-                type="text"
-                maxLength={SCHEMA_LIMITS.TITLE_MAX}
-                value={title}
-                onChange={(e) => {
-                  setTitle(e.target.value);
-                  if (titleError && e.target.value.trim()) setTitleError(false);
-                }}
-                placeholder="Digite o nome da aula"
-                className={`w-full px-3.5 py-2.5 rounded-xl bg-inset border text-sm text-ink focus:outline-none ${
-                  titleError
-                    ? 'border-danger focus:border-danger'
-                    : 'border-line focus:border-brand-soft'
-                }`}
-              />
-              {titleError && (
-                <p className="text-xs text-danger mt-1 font-medium">
-                  Informe o nome da aula.
-                </p>
-              )}
             </div>
+          )}
 
-            {/* 2. Link do Vídeo (Opcional) */}
-            <div>
-              <label className="block text-xs font-medium text-ink-2 mb-1.5">
-                Link do vídeo (opcional)
-              </label>
-              <input
-                type="text"
-                value={youtubeInput}
-                onChange={(e) => setYoutubeInput(e.target.value)}
-                placeholder="Cole o link do vídeo (ou deixe em branco para postar só PDF)"
-                className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
-              />
-            </div>
-
-            {/* 3. Texto ou Link */}
-            <div>
-              <label className="block text-xs font-medium text-ink-2 mb-1.5">
-                Texto ou link
-              </label>
-              <textarea
-                rows={3}
-                maxLength={SCHEMA_LIMITS.LESSON_DESC_MAX}
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Texto ou link complementar (opcional)"
-                className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
-              />
-            </div>
-
-            {/* 4. Imagem da Aula (Upload direto da memória do aparelho) */}
-            <div className="flex items-center justify-between gap-4 p-3.5 rounded-xl bg-inset border border-line">
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-12 aspect-[3/4] rounded-lg overflow-hidden border border-line shrink-0 bg-surface-2">
-                  <CoverArtwork
-                    src={thumbnailUrl || 'preset:stadium'}
-                    title={title || 'Capa'}
-                    className="w-full h-full"
-                    showBottomPurpleBar={true}
-                  />
-                </div>
-                <div className="min-w-0">
-                  <span className="block text-xs font-medium text-ink">
-                    Imagem da capa
-                  </span>
-                  <span className="block text-xs text-ink-muted mt-0.5">
-                    600 × 800 px
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 shrink-0">
-                {thumbnailUrl && !thumbnailUrl.startsWith('preset:') && (
-                  <button
-                    type="button"
-                    onClick={() => setThumbnailUrl('')}
-                    className="p-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-danger transition-colors cursor-pointer"
-                    title="Remover imagem"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                )}
-                <label className="px-3.5 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5 whitespace-nowrap transition-colors shrink-0">
-                  <Upload className="w-3.5 h-3.5 shrink-0" />
-                  <span className="whitespace-nowrap">
-                    {uploadingImg ? 'Carregando...' : 'Enviar Imagem'}
+          {/* PDFs Section */}
+          <div className="p-4 rounded-xl bg-inset border border-line space-y-3">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <span className="text-xs font-semibold text-ink">
+                Materiais em PDF ({pdfs.length}/{SCHEMA_LIMITS.MAX_PDFS})
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setUploadError((prev) =>
+                      prev ? null : 'Failed to fetch (Diagnóstico Cloudflare R2 / CORS)'
+                    )
+                  }
+                  className="px-2.5 py-1.5 rounded-xl bg-surface hover:bg-chip-hover border border-line text-[11px] font-medium text-ink-2 inline-flex items-center gap-1 transition-colors cursor-pointer"
+                  title="Ver diagnóstico de erro R2 / Copiar CORS JSON"
+                >
+                  <HelpCircle className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Diagnóstico R2 / CORS</span>
+                </button>
+                <label
+                  className={`px-3 py-1.5 rounded-xl bg-chip hover:bg-chip-hover text-xs font-medium text-ink-2 inline-flex items-center gap-1.5 transition-colors ${
+                    uploadingPdf || isSaving
+                      ? 'opacity-60 pointer-events-none'
+                      : 'cursor-pointer'
+                  }`}
+                >
+                  <Upload className="w-3.5 h-3.5 text-brand-accent" />
+                  <span>
+                    {uploadingPdf
+                      ? `Enviando (${uploadProgress}%)...`
+                      : 'Enviar PDF'}
                   </span>
                   <input
                     type="file"
-                    accept="image/*"
-                    onChange={handleImageFileUpload}
+                    accept="application/pdf,.pdf"
+                    disabled={uploadingPdf || isSaving}
+                    onChange={handleFileUpload}
                     className="hidden"
                   />
                 </label>
               </div>
             </div>
 
-            {/* 5. PDFs (Somente upload do arquivo PDF do aparelho — usa o nome do próprio arquivo PDF) */}
-            <div className="p-3.5 rounded-xl bg-inset border border-line space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-ink-2">PDFs</span>
-
-                <input
-                  ref={pdfInputRef}
-                  type="file"
-                  accept="application/pdf,.pdf"
-                  multiple
-                  onChange={handleUploadLocalPdf}
-                  className="hidden"
+            {uploadingPdf && (
+              <div className="w-full h-1.5 rounded-full bg-surface overflow-hidden">
+                <div
+                  className="h-full bg-brand transition-all duration-200"
+                  style={{ width: `${Math.max(5, uploadProgress)}%` }}
                 />
-
-                <button
-                  type="button"
-                  disabled={uploadingPdf}
-                  onClick={() => pdfInputRef.current?.click()}
-                  className="px-3.5 py-2 rounded-xl bg-brand hover:bg-brand-hover disabled:opacity-50 text-xs font-semibold text-white cursor-pointer inline-flex items-center gap-1.5 whitespace-nowrap transition-colors"
-                >
-                  <Upload className="w-3.5 h-3.5 shrink-0" />
-                  <span className="whitespace-nowrap">
-                    {uploadingPdf
-                      ? `Enviando (${pdfUploadPct}%)...`
-                      : 'Enviar PDF'}
-                  </span>
-                </button>
               </div>
+            )}
 
-              {pdfError && <p className="text-xs text-danger">{pdfError}</p>}
+            {uploadError && (
+              <UploadDiagnosticAlert
+                error={uploadError}
+                onDismiss={() => setUploadError(null)}
+              />
+            )}
 
-              {pdfs.length > 0 && (
-                <div className="space-y-1.5 pt-1">
-                  {pdfs.map((pdf, idx) => (
-                    <div
-                      key={pdf.id}
-                      className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-surface-2 border border-line-soft transition-all"
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <FileText className="w-3.5 h-3.5 text-accent-400 shrink-0" />
-                        <span className="text-xs text-ink truncate">
-                          {pdf.title}
-                        </span>
-                        {pdf.sizeLabel && (
-                          <span className="text-[10px] font-mono text-ink-muted shrink-0">
-                            ({pdf.sizeLabel})
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        {pdfs.length > 1 && (
-                          <>
-                            <button
-                              type="button"
-                              disabled={idx === 0}
-                              onClick={() => movePdf(idx, 'up')}
-                              className="p-1 rounded hover:bg-chip-hover text-ink-2 hover:text-ink disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
-                              title="Subir PDF"
-                            >
-                              <ArrowUp className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              disabled={idx === pdfs.length - 1}
-                              onClick={() => movePdf(idx, 'down')}
-                              className="p-1 rounded hover:bg-chip-hover text-ink-2 hover:text-ink disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
-                              title="Descer PDF"
-                            >
-                              <ArrowDown className="w-3.5 h-3.5" />
-                            </button>
-                          </>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setPdfs((prev) =>
-                              prev.filter((item) => item.id !== pdf.id)
-                            )
-                          }
-                          className="p-1 text-ink-muted hover:text-danger transition-colors cursor-pointer"
-                          title="Remover PDF"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
+            {pdfs.length > 0 && (
+              <div className="space-y-2">
+                {pdfs.map((pdf, idx) => (
+                  <div
+                    key={pdf.id}
+                    className="flex items-center gap-2.5 p-2.5 rounded-xl bg-surface border border-line-soft"
+                  >
+                    <FileText className="w-4 h-4 text-brand-accent shrink-0" />
+                    <input
+                      type="text"
+                      value={pdf.title}
+                      onChange={(e) => updatePdfTitle(idx, e.target.value)}
+                      placeholder="Título do PDF"
+                      className="flex-1 bg-transparent text-xs text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 rounded px-1"
+                    />
+                    <span className="text-xs font-mono tabular-nums text-ink-muted shrink-0">
+                      {pdf.sizeLabel}
+                    </span>
+
+                    <div className="flex items-center gap-0.5 shrink-0">
+                      {pdfs.length > 1 && (
+                        <>
+                          <button
+                            type="button"
+                            disabled={idx === 0}
+                            onClick={() => movePdf(idx, 'up')}
+                            className="p-1 text-ink-2 hover:text-ink disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                            title="Subir PDF"
+                          >
+                            <ArrowUp className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={idx === pdfs.length - 1}
+                            onClick={() => movePdf(idx, 'down')}
+                            className="p-1 text-ink-2 hover:text-ink disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                            title="Descer PDF"
+                          >
+                            <ArrowDown className="w-3.5 h-3.5" />
+                          </button>
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => removePdf(idx)}
+                        className="p-1 text-ink-muted hover:text-rose-400 transition-colors cursor-pointer"
+                        title="Remover PDF"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
-          <div className="shrink-0 flex items-center justify-end gap-2.5 px-5 pt-3.5 pb-[max(1rem,env(safe-area-inset-bottom))] sm:pb-4 border-t border-line bg-surface">
-            <button
-              type="button"
-              onClick={onClose}
-              className="min-h-10 px-4 py-2 rounded-xl bg-chip hover:bg-chip-hover text-ink-2 text-xs font-semibold transition-colors cursor-pointer"
-            >
-              Cancelar
-            </button>
+          <div>
+            <label className="block text-xs font-medium text-ink-2 mb-1.5">
+              Descrição / Resumo (Opcional)
+            </label>
+            <textarea
+              rows={3}
+              maxLength={SCHEMA_LIMITS.LESSON_DESC_MAX}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Anotações, fórmulas ou resumo da aula..."
+              className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-xs text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
+            />
+          </div>
+
+          <label className="flex items-center gap-2.5 text-xs text-ink-2 cursor-pointer pt-1">
+            <input
+              type="checkbox"
+              checked={isFree}
+              onChange={(e) => setIsFree(e.target.checked)}
+              className="w-4 h-4 rounded accent-[#2563eb]"
+            />
+            Disponibilizar esta aula gratuitamente (Aulas Grátis)
+          </label>
+
+          <div className="flex items-center gap-3 pt-3 border-t border-line">
             <button
               type="submit"
               disabled={isSaving || uploadingPdf}
-              className="min-h-10 px-5 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
+              className="px-5 py-2.5 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
             >
               {isSaving
                 ? 'Salvando...'
                 : uploadingPdf
-                  ? 'Aguarde o PDF...'
+                  ? `Aguarde o PDF (${uploadProgress}%)...`
                   : editingLesson
-                    ? 'Salvar'
+                    ? 'Salvar Alterações'
                     : 'Criar Aula'}
+            </button>
+            <button
+              type="button"
+              disabled={isSaving || uploadingPdf}
+              onClick={onClose}
+              className="px-4 py-2.5 rounded-xl bg-chip hover:bg-chip-hover text-ink-2 text-xs font-semibold transition-colors disabled:opacity-40 cursor-pointer"
+            >
+              Cancelar
             </button>
           </div>
         </form>

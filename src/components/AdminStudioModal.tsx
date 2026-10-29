@@ -22,18 +22,9 @@ import {
   Search,
   Calendar as CalendarIcon,
   Compass,
-  ShieldCheck,
-  Database,
-  KeyRound,
-  Image as ImageIcon,
+  Radio,
 } from 'lucide-react';
-import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
-import { db } from '../firebase';
-import { updatePdfChunksIsFree } from '../utils/pdfStorage';
-import {
-  compressImageToDataUrl,
-  recompressDataUrlImage,
-} from '../utils/imageCompress';
+import { compressImageToDataUrl } from '../utils/imageCompress';
 import { AdminMentoriaTab } from './AdminMentoriaTab';
 import {
   Course,
@@ -52,6 +43,7 @@ import {
   formatBirthDateDisplay,
   generateSafeId,
   emailToStudentDocId,
+  extractYoutubeId,
   FREE_COURSE_ID,
   FREE_PLAYLIST_ID,
 } from '../types';
@@ -72,6 +64,10 @@ interface AdminWorkspaceProps {
   platformConfig: PlatformConfig;
   onOpenNewLessonModal: (defaultIsFree?: boolean, defaultFolderId?: string) => void;
   onOpenEditLessonModal: (lesson: Lesson) => void;
+  onSaveLesson: (
+    lesson: Omit<Lesson, 'createdAt' | 'updatedAt'>,
+    isNew: boolean
+  ) => Promise<void>;
   onDeleteLesson: (lessonId: string) => Promise<void>;
   onSaveLessonFolder: (
     folder: Omit<LessonFolder, 'createdAt' | 'updatedAt'>,
@@ -647,6 +643,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
   platformConfig,
   onOpenNewLessonModal,
   onOpenEditLessonModal,
+  onSaveLesson,
   onDeleteLesson,
   onSaveLessonFolder,
   onDeleteLessonFolder,
@@ -884,6 +881,31 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
   const [restrictToStudentList, setRestrictToStudentList] = useState(
     platformConfig.restrictToStudentList
   );
+  const [liveEnabled, setLiveEnabled] = useState(
+    Boolean(platformConfig.liveEnabled)
+  );
+  const [liveAutoSchedule, setLiveAutoSchedule] = useState(
+    Boolean(platformConfig.liveAutoSchedule)
+  );
+  const [liveTitle, setLiveTitle] = useState(platformConfig.liveTitle || '');
+  const [liveYoutubeUrl, setLiveYoutubeUrl] = useState(
+    platformConfig.liveYoutubeUrl || ''
+  );
+  const [liveStartAt, setLiveStartAt] = useState(
+    platformConfig.liveStartAt || ''
+  );
+  const [liveEndAt, setLiveEndAt] = useState(platformConfig.liveEndAt || '');
+  const [liveChatEnabled, setLiveChatEnabled] = useState(
+    platformConfig.liveChatEnabled !== undefined
+      ? Boolean(platformConfig.liveChatEnabled)
+      : true
+  );
+  const [liveIsFree, setLiveIsFree] = useState(
+    Boolean(platformConfig.liveIsFree)
+  );
+  const [configSavedNotice, setConfigSavedNotice] = useState<string | null>(
+    null
+  );
 
   useEffect(() => {
     setBrandName(platformConfig.brandName);
@@ -892,6 +914,18 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
     setHeroCtaText(platformConfig.heroCtaText);
     setHeroBgUrl(platformConfig.heroBgUrl || '');
     setRestrictToStudentList(platformConfig.restrictToStudentList);
+    setLiveEnabled(Boolean(platformConfig.liveEnabled));
+    setLiveAutoSchedule(Boolean(platformConfig.liveAutoSchedule));
+    setLiveTitle(platformConfig.liveTitle || '');
+    setLiveYoutubeUrl(platformConfig.liveYoutubeUrl || '');
+    setLiveStartAt(platformConfig.liveStartAt || '');
+    setLiveEndAt(platformConfig.liveEndAt || '');
+    setLiveChatEnabled(
+      platformConfig.liveChatEnabled !== undefined
+        ? Boolean(platformConfig.liveChatEnabled)
+        : true
+    );
+    setLiveIsFree(Boolean(platformConfig.liveIsFree));
   }, [
     platformConfig.brandName,
     platformConfig.heroTitle,
@@ -899,6 +933,14 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
     platformConfig.heroCtaText,
     platformConfig.heroBgUrl,
     platformConfig.restrictToStudentList,
+    platformConfig.liveEnabled,
+    platformConfig.liveAutoSchedule,
+    platformConfig.liveTitle,
+    platformConfig.liveYoutubeUrl,
+    platformConfig.liveStartAt,
+    platformConfig.liveEndAt,
+    platformConfig.liveChatEnabled,
+    platformConfig.liveIsFree,
   ]);
 
   // --- PLAYLIST HANDLERS ---
@@ -1410,6 +1452,7 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
   const handleConfigSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSaving(true);
+    setConfigSavedNotice(null);
     try {
       await onSaveConfig({
         brandName: sanitizeString(brandName, 60, 'CURSO VÉRTICE'),
@@ -1426,252 +1469,247 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
         heroCtaText: sanitizeString(heroCtaText, 60, 'Confira agora!'),
         heroBgUrl: sanitizeString(heroBgUrl, SCHEMA_LIMITS.URL_MAX, ''),
         restrictToStudentList: Boolean(restrictToStudentList),
+        liveEnabled: Boolean(liveEnabled),
+        liveAutoSchedule: Boolean(liveAutoSchedule),
+        liveChannelId: sanitizeString(
+          platformConfig.liveChannelId || '',
+          120,
+          ''
+        ),
+        liveTitle: sanitizeString(liveTitle, 160, ''),
+        liveDescription: sanitizeString(
+          platformConfig.liveDescription || '',
+          SCHEMA_LIMITS.LESSON_DESC_MAX,
+          ''
+        ),
+        liveYoutubeUrl: sanitizeString(liveYoutubeUrl, 300, ''),
+        liveStartAt: sanitizeString(liveStartAt, 40, ''),
+        liveEndAt: sanitizeString(liveEndAt, 40, ''),
+        liveChatEnabled: Boolean(liveChatEnabled),
+        liveIsFree: Boolean(liveIsFree),
+        livePdfs: platformConfig.livePdfs || [],
         updatedBy: currentUserUid,
       });
+      setConfigSavedNotice('Configurações salvas com sucesso!');
+      window.setTimeout(() => setConfigSavedNotice(null), 4000);
     } finally {
       setIsSaving(false);
     }
   };
 
-  // --- MIGRATION HANDLERS (A4.1, A4.2 & Fase 1.6 Image Optimization) ---
-  const [migratingKeys, setMigratingKeys] = useState(false);
-  const [migrationKeysMsg, setMigrationKeysMsg] = useState<string | null>(null);
-  const [migratingPdfs, setMigratingPdfs] = useState(false);
-  const [migrationPdfsMsg, setMigrationPdfsMsg] = useState<string | null>(null);
-  const [optimizingImages, setOptimizingImages] = useState(false);
-  const [optimizeImagesMsg, setOptimizeImagesMsg] = useState<string | null>(
-    null
+  const [liveFormError, setLiveFormError] = useState<string | null>(null);
+  const [liveSavedToFolderMsg, setLiveSavedToFolderMsg] = useState<
+    string | null
+  >(null);
+  const [savingLiveToFolder, setSavingLiveToFolder] = useState(false);
+  const [selectedCourseByLiveId, setSelectedCourseByLiveId] = useState<
+    Record<string, string>
+  >({});
+  const [addingLiveToCourseId, setAddingLiveToCourseId] = useState<
+    string | null
+  >(null);
+
+  const livesFolder = React.useMemo(
+    () =>
+      lessonFolders.find(
+        (f) =>
+          f.id === 'folder_lives' || f.name.trim().toLowerCase() === 'lives'
+      ) || null,
+    [lessonFolders]
   );
 
-  const simuladosWithInlineKey = simulados.filter((s) => Boolean(s.answerKey));
+  const savedLivesLessons = React.useMemo(() => {
+    if (!livesFolder) return [];
+    return lessons.filter((l) => l.folderId === livesFolder.id);
+  }, [lessons, livesFolder]);
 
-  const handleMigrateGabaritos = async () => {
-    if (migratingKeys) return;
-    setMigratingKeys(true);
-    setMigrationKeysMsg(null);
-    try {
-      let count = 0;
-      for (const sim of simulados) {
-        if (!sim.answerKey) continue;
-        const keyRef = doc(db, 'simuladoKeys', sim.id);
-        const existingKeySnap = await getDoc(keyRef).catch(() => null);
-        const existingKeyData = existingKeySnap?.exists()
-          ? existingKeySnap.data()
-          : null;
-
-        await setDoc(keyRef, {
-          answerKey: sim.answerKey.replace(/[^ABCDE]/g, 'A'),
-          authorId: existingKeyData?.authorId || sim.authorId || currentUserUid,
-          createdAt:
-            existingKeyData?.createdAt || sim.createdAt || serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-
-        const simRef = doc(db, 'simulados', sim.id);
-        await setDoc(simRef, {
-          title: sim.title,
-          area: sim.area,
-          questionCount: sim.questionCount,
-          timeLimitMinutes: sim.timeLimitMinutes || 0,
-          pdfUrl: sim.pdfUrl || '',
-          pdfTitle: sim.pdfTitle || '',
-          resultsReleased: Boolean(sim.resultsReleased),
-          isPublished: true,
-          authorId: sim.authorId || currentUserUid,
-          createdAt: sim.createdAt || serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-        count++;
-      }
-      setMigrationKeysMsg(
-        `Sucesso: ${count} gabarito(s) migrado(s) para a coleção simuladoKeys!`
-      );
-    } catch (err) {
-      console.error('Erro ao migrar gabaritos:', err);
-      setMigrationKeysMsg('Erro durante a migração de gabaritos. Veja o console.');
-    } finally {
-      setMigratingKeys(false);
+  // Garante automaticamente que a pasta "Lives" exista em Pastas de Aulas
+  const ensuredLivesFolderRef = useRef(false);
+  useEffect(() => {
+    if (ensuredLivesFolderRef.current || !currentUserUid) return;
+    if (livesFolder) {
+      ensuredLivesFolderRef.current = true;
+      return;
     }
-  };
+    ensuredLivesFolderRef.current = true;
+    void onSaveLessonFolder(
+      {
+        id: 'folder_lives',
+        name: 'Lives',
+        isPublished: true,
+        authorId: currentUserUid,
+      },
+      true
+    );
+  }, [livesFolder, currentUserUid, onSaveLessonFolder]);
 
-  const handleMigrateFreePdfs = async () => {
-    if (migratingPdfs) return;
-    setMigratingPdfs(true);
-    setMigrationPdfsMsg(null);
-    try {
-      const freeLessons = lessons.filter((l) => l.isFree);
-      let pdfCount = 0;
-      for (const lesson of freeLessons) {
-        if (!lesson.pdfs) continue;
-        for (const pdf of lesson.pdfs) {
-          if (pdf.url && pdf.url.startsWith('chunked:')) {
-            await updatePdfChunksIsFree(pdf.url, true);
-            pdfCount++;
-          }
-        }
-      }
-      setMigrationPdfsMsg(
-        `Sucesso: partes de ${pdfCount} PDF(s) de aulas grátis marcadas com isFree: true!`
-      );
-    } catch (err) {
-      console.error('Erro ao marcar PDFs grátis:', err);
-      setMigrationPdfsMsg('Erro durante a atualização dos PDFs grátis.');
-    } finally {
-      setMigratingPdfs(false);
+  const handleSaveLiveToLivesFolder = async () => {
+    if (savingLiveToFolder) return;
+    setLiveFormError(null);
+    setLiveSavedToFolderMsg(null);
+
+    const cleanTitle = liveTitle.trim();
+    if (!cleanTitle) {
+      setLiveFormError('Informe o nome da live antes de salvar.');
+      return;
     }
-  };
+    const extractedId = extractYoutubeId(
+      liveYoutubeUrl || platformConfig.liveChannelId || ''
+    );
+    if (!extractedId) {
+      setLiveFormError('Cole o link da live ou informe o ID do canal.');
+      return;
+    }
 
-  const handleOptimizeExistingImages = async () => {
-    if (optimizingImages) return;
-    setOptimizingImages(true);
-    setOptimizeImagesMsg(null);
-    const MIN_BYTES = 150 * 1024;
-    let optimizedCount = 0;
-    let savedBytes = 0;
-
+    setSavingLiveToFolder(true);
     try {
-      // 1. Courses (coverUrl -> 900, bannerUrl -> 1920)
-      for (const course of courses) {
-        let nextCover = course.coverUrl || '';
-        let nextBanner = course.bannerUrl || '';
-        let changed = false;
-
-        if (nextCover.startsWith('data:image/') && nextCover.length > MIN_BYTES) {
-          const compressed = await recompressDataUrlImage(nextCover, 900, 0.85);
-          if (compressed.length < nextCover.length) {
-            savedBytes += nextCover.length - compressed.length;
-            nextCover = compressed;
-            changed = true;
-            optimizedCount++;
-          }
-        }
-
-        if (
-          nextBanner.startsWith('data:image/') &&
-          nextBanner.length > MIN_BYTES
-        ) {
-          const compressed = await recompressDataUrlImage(
-            nextBanner,
-            1920,
-            0.82
-          );
-          if (compressed.length < nextBanner.length) {
-            savedBytes += nextBanner.length - compressed.length;
-            nextBanner = compressed;
-            changed = true;
-            optimizedCount++;
-          }
-        }
-
-        if (changed) {
-          await setDoc(doc(db, 'courses', course.id), {
-            title: course.title,
-            subtitle: course.subtitle || '',
-            description: course.description || '',
-            category: course.category || 'Cursos',
-            coverUrl: nextCover,
-            bannerUrl: nextBanner,
-            playlistIds: course.playlistIds || [],
-            featured: Boolean(course.featured),
+      const targetFolderId = livesFolder ? livesFolder.id : 'folder_lives';
+      if (!livesFolder) {
+        await onSaveLessonFolder(
+          {
+            id: targetFolderId,
+            name: 'Lives',
             isPublished: true,
-            authorId: course.authorId || currentUserUid,
-            createdAt: course.createdAt || serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-        }
-      }
-
-      // 2. Playlists (coverUrl -> 900)
-      for (const pl of playlists) {
-        const origCover = pl.coverUrl || '';
-        if (origCover.startsWith('data:image/') && origCover.length > MIN_BYTES) {
-          const compressed = await recompressDataUrlImage(origCover, 900, 0.85);
-          if (compressed.length < origCover.length) {
-            savedBytes += origCover.length - compressed.length;
-            optimizedCount++;
-            await setDoc(doc(db, 'playlists', pl.id), {
-              title: pl.title,
-              description: pl.description || '',
-              coverUrl: compressed,
-              lessonIds: pl.lessonIds || [],
-              isPublished: true,
-              authorId: pl.authorId || currentUserUid,
-              createdAt: pl.createdAt || serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            });
-          }
-        }
-      }
-
-      // 3. Lessons (thumbnailUrl -> 720)
-      for (const lesson of lessons) {
-        const origThumb = lesson.thumbnailUrl || '';
-        if (origThumb.startsWith('data:image/') && origThumb.length > MIN_BYTES) {
-          const compressed = await recompressDataUrlImage(origThumb, 720, 0.85);
-          if (compressed.length < origThumb.length) {
-            savedBytes += origThumb.length - compressed.length;
-            optimizedCount++;
-            await setDoc(doc(db, 'lessons', lesson.id), {
-              title: lesson.title,
-              description: lesson.description || '',
-              youtubeId: lesson.youtubeId,
-              duration: lesson.duration || '15:00',
-              thumbnailUrl: compressed,
-              pdfs: lesson.pdfs || [],
-              folderId: lesson.folderId || '',
-              isFree: Boolean(lesson.isFree),
-              isPublished: true,
-              authorId: lesson.authorId || currentUserUid,
-              createdAt: lesson.createdAt || serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            });
-          }
-        }
-      }
-
-      // 4. Platform Config (heroBgUrl -> 1920)
-      const origHero = platformConfig.heroBgUrl || '';
-      if (origHero.startsWith('data:image/') && origHero.length > MIN_BYTES) {
-        const compressed = await recompressDataUrlImage(origHero, 1920, 0.82);
-        if (compressed.length < origHero.length) {
-          savedBytes += origHero.length - compressed.length;
-          optimizedCount++;
-          setHeroBgUrl(compressed);
-          await onSaveConfig({
-            brandName: sanitizeString(brandName, 60, 'CURSO VÉRTICE'),
-            heroTitle: sanitizeString(
-              heroTitle,
-              140,
-              'Sua plataforma de cursos para Enem e vestibulares'
-            ),
-            heroSubtitle: sanitizeString(
-              heroSubtitle,
-              240,
-              'Especialista em física, química e matemática'
-            ),
-            heroCtaText: sanitizeString(heroCtaText, 60, 'Confira agora!'),
-            heroBgUrl: compressed,
-            restrictToStudentList: Boolean(restrictToStudentList),
-            updatedBy: currentUserUid,
-          });
-        }
-      }
-
-      const savedKb = Math.max(0, Math.round(savedBytes / 1024));
-      if (optimizedCount === 0) {
-        setOptimizeImagesMsg(
-          'Todas as imagens já estão otimizadas (nenhuma acima de 150 KB precisou de redução).'
-        );
-      } else {
-        setOptimizeImagesMsg(
-          `Sucesso: ${optimizedCount} imagem(ns) otimizada(s), economizando ${savedKb} KB!`
+            authorId: currentUserUid,
+          },
+          true
         );
       }
-    } catch (err) {
-      console.error('Erro ao otimizar imagens:', err);
-      setOptimizeImagesMsg('Erro ao otimizar imagens. Veja o console.');
+
+      const newLessonId = generateSafeId('lesson');
+      await onSaveLesson(
+        {
+          id: newLessonId,
+          title: sanitizeString(cleanTitle, SCHEMA_LIMITS.TITLE_MAX, 'Live'),
+          description: sanitizeString(
+            platformConfig.liveDescription || '',
+            SCHEMA_LIMITS.LESSON_DESC_MAX,
+            ''
+          ),
+          youtubeId: extractedId,
+          duration: '60:00',
+          thumbnailUrl: 'preset:stadium',
+          pdfs: platformConfig.livePdfs || [],
+          folderId: targetFolderId,
+          isFree: Boolean(liveIsFree),
+          isPublished: true,
+          authorId: currentUserUid,
+        },
+        true
+      );
+
+      await onSaveConfig({
+        brandName: sanitizeString(brandName, 60, 'CURSO VÉRTICE'),
+        heroTitle: sanitizeString(
+          heroTitle,
+          140,
+          'Sua plataforma de cursos para Enem e vestibulares'
+        ),
+        heroSubtitle: sanitizeString(
+          heroSubtitle,
+          240,
+          'Especialista em física, química e matemática'
+        ),
+        heroCtaText: sanitizeString(heroCtaText, 60, 'Confira agora!'),
+        heroBgUrl: sanitizeString(heroBgUrl, SCHEMA_LIMITS.URL_MAX, ''),
+        restrictToStudentList: Boolean(restrictToStudentList),
+        liveEnabled: Boolean(liveEnabled),
+        liveAutoSchedule: Boolean(liveAutoSchedule),
+        liveChannelId: sanitizeString(
+          platformConfig.liveChannelId || '',
+          120,
+          ''
+        ),
+        liveTitle: sanitizeString(cleanTitle, 160, ''),
+        liveDescription: sanitizeString(
+          platformConfig.liveDescription || '',
+          SCHEMA_LIMITS.LESSON_DESC_MAX,
+          ''
+        ),
+        liveYoutubeUrl: sanitizeString(liveYoutubeUrl, 300, ''),
+        liveStartAt: sanitizeString(liveStartAt, 40, ''),
+        liveEndAt: sanitizeString(liveEndAt, 40, ''),
+        liveChatEnabled: Boolean(liveChatEnabled),
+        liveIsFree: Boolean(liveIsFree),
+        livePdfs: platformConfig.livePdfs || [],
+        updatedBy: currentUserUid,
+      });
+
+      setLiveSavedToFolderMsg(
+        'Salva na pasta "Lives"! Agora você pode adicioná-la em qualquer curso.'
+      );
+      window.setTimeout(() => setLiveSavedToFolderMsg(null), 5000);
     } finally {
-      setOptimizingImages(false);
+      setSavingLiveToFolder(false);
+    }
+  };
+
+  const handlePlaceLiveInCourse = async (
+    lesson: Lesson,
+    targetCourseId: string
+  ) => {
+    if (!targetCourseId || addingLiveToCourseId) return;
+    const course = regularCourses.find((c) => c.id === targetCourseId);
+    if (!course) return;
+
+    setAddingLiveToCourseId(lesson.id);
+    try {
+      const coursePls = (course.playlistIds || [])
+        .map((pid) => regularPlaylists.find((p) => p.id === pid))
+        .filter((p): p is Playlist => Boolean(p));
+
+      const existingLivesPl =
+        coursePls.find((p) => p.title.trim().toLowerCase() === 'lives') ||
+        coursePls[0] ||
+        null;
+
+      if (existingLivesPl) {
+        if (!existingLivesPl.lessonIds.includes(lesson.id)) {
+          await onSavePlaylist(
+            {
+              ...existingLivesPl,
+              lessonIds: [...existingLivesPl.lessonIds, lesson.id].slice(
+                0,
+                SCHEMA_LIMITS.MAX_LESSON_IDS
+              ),
+              authorId: currentUserUid,
+            },
+            false
+          );
+        }
+      } else {
+        const newPlId = generateSafeId('playlist');
+        await onSavePlaylist(
+          {
+            id: newPlId,
+            title: 'Lives',
+            description: '',
+            coverUrl: course.coverUrl || 'preset:trophy',
+            lessonIds: [lesson.id],
+            isPublished: true,
+            authorId: currentUserUid,
+          },
+          true
+        );
+        await onSaveCourse(
+          {
+            ...course,
+            playlistIds: [...(course.playlistIds || []), newPlId].slice(
+              0,
+              SCHEMA_LIMITS.MAX_PLAYLIST_IDS
+            ),
+            authorId: currentUserUid,
+          },
+          false
+        );
+      }
+
+      setLiveSavedToFolderMsg(
+        `Aula "${lesson.title}" adicionada ao curso "${course.title}"!`
+      );
+      window.setTimeout(() => setLiveSavedToFolderMsg(null), 4000);
+    } finally {
+      setAddingLiveToCourseId(null);
     }
   };
 
@@ -1782,8 +1820,14 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
                 : 'bg-surface border-line text-ink-muted hover:text-ink'
             }`}
           >
-            <Sliders className="w-3.5 h-3.5" />
-            Fundo & Marca
+            <Radio
+              className={`w-3.5 h-3.5 ${
+                liveEnabled || liveAutoSchedule
+                  ? 'text-rose-400 animate-pulse'
+                  : ''
+              }`}
+            />
+            Live & Marca
           </button>
 
           {onOpenCalendar && (
@@ -4330,278 +4374,394 @@ export const AdminStudioModal: React.FC<AdminWorkspaceProps> = ({
         />
       )}
 
-      {/* TAB 7: PLATFORM BACKGROUND & BRAND + MIGRATIONS & SECURITY */}
+      {/* TAB 7: LIVE & MARCA */}
       {activeTab === 'config' && (
         <div className="space-y-6 max-w-3xl pb-24 sm:pb-6">
+          {/* CARD 1: CONFIGURAÇÃO DA LIVE E SALVAMENTO NA PASTA LIVES */}
           <form
             noValidate
             onSubmit={handleConfigSubmit}
-            className="p-6 rounded-2xl bg-surface border border-line shadow-card space-y-4"
+            className="p-6 rounded-2xl bg-surface border border-line shadow-card space-y-5"
           >
-            <h3 className="text-sm font-bold text-ink mb-2">
-              Personalização Visual & Marca
-            </h3>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-500 flex items-center justify-center shrink-0">
+                  <Radio className="w-4 h-4" />
+                </div>
+                <h3 className="text-sm font-bold text-ink flex items-center gap-2">
+                  <span>Live no YouTube</span>
+                  {(liveEnabled || liveAutoSchedule) && (
+                    <span className="px-2 py-0.5 rounded-full bg-rose-500/15 border border-rose-500/40 text-rose-500 text-[10px] font-extrabold uppercase tracking-wider inline-flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
+                      {liveAutoSchedule ? 'Automática' : 'Ao Vivo'}
+                    </span>
+                  )}
+                </h3>
+              </div>
 
-            <CleanCoverInput
-              label="Imagem de Plano de Fundo"
-              sizeHint="1080 × 1920 px"
-              value={heroBgUrl}
-              onChange={setHeroBgUrl}
-              targetWidth={IMAGE_DIMENSIONS.PLATFORM_BG.targetWidth}
-              targetHeight={IMAGE_DIMENSIONS.PLATFORM_BG.targetHeight}
-              resetValue=""
-            />
+              {/* Visibilidade: Não listado (Padrão) ou Público */}
+              <div className="inline-flex p-1 rounded-xl bg-inset border border-line">
+                <button
+                  type="button"
+                  onClick={() => setLiveIsFree(false)}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                    !liveIsFree
+                      ? 'bg-brand text-white shadow-sm'
+                      : 'text-ink-muted hover:text-ink'
+                  }`}
+                >
+                  Não listado
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLiveIsFree(true)}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                    liveIsFree
+                      ? 'bg-brand text-white shadow-sm'
+                      : 'text-ink-muted hover:text-ink'
+                  }`}
+                >
+                  Público
+                </button>
+              </div>
+            </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
               <div>
                 <label className="block text-xs font-medium text-ink-2 mb-1">
-                  Nome da Plataforma
+                  Nome da Live
                 </label>
                 <input
                   type="text"
-                  maxLength={60}
-                  value={brandName}
-                  onChange={(e) => setBrandName(e.target.value)}
+                  maxLength={160}
+                  value={liveTitle}
+                  onChange={(e) => {
+                    setLiveTitle(e.target.value);
+                    if (liveFormError) setLiveFormError(null);
+                  }}
+                  placeholder="Digite o nome da live"
                   className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                 />
               </div>
 
               <div>
                 <label className="block text-xs font-medium text-ink-2 mb-1">
-                  Texto do Botão (Alunos Bloqueados)
+                  Link da Live (YouTube)
                 </label>
                 <input
                   type="text"
-                  maxLength={60}
-                  value={heroCtaText}
-                  onChange={(e) => setHeroCtaText(e.target.value)}
+                  maxLength={300}
+                  value={liveYoutubeUrl}
+                  onChange={(e) => {
+                    setLiveYoutubeUrl(e.target.value);
+                    if (liveFormError) setLiveFormError(null);
+                  }}
+                  placeholder="https://youtube.com/live/..."
                   className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
                 />
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-medium text-ink-2 mb-1">
-                Título Principal
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <label className="flex items-center gap-2.5 p-3 rounded-xl bg-inset border border-line cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={liveEnabled}
+                  onChange={(e) => setLiveEnabled(e.target.checked)}
+                  className="w-4 h-4 rounded accent-rose-600 shrink-0"
+                />
+                <span className="text-xs font-bold text-ink">
+                  Ativar Ao Vivo Agora
+                </span>
               </label>
-              <input
-                type="text"
-                maxLength={140}
-                value={heroTitle}
-                onChange={(e) => setHeroTitle(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
-              />
+
+              <label className="flex items-center gap-2.5 p-3 rounded-xl bg-inset border border-line cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={liveAutoSchedule}
+                  onChange={(e) => setLiveAutoSchedule(e.target.checked)}
+                  className="w-4 h-4 rounded accent-[#2563eb] shrink-0"
+                />
+                <span className="text-xs font-bold text-ink">
+                  Agendar Horário
+                </span>
+              </label>
+
+              <label className="flex items-center gap-2.5 p-3 rounded-xl bg-inset border border-brand-soft/40 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={liveChatEnabled}
+                  onChange={(e) => setLiveChatEnabled(e.target.checked)}
+                  className="w-4 h-4 rounded accent-[#2563eb] shrink-0"
+                />
+                <span className="text-xs font-bold text-ink">
+                  Chat Ao Vivo Ativo
+                </span>
+              </label>
             </div>
 
-            <div>
-              <label className="block text-xs font-medium text-ink-2 mb-1">
-                Subtítulo
-              </label>
-              <input
-                type="text"
-                maxLength={240}
-                value={heroSubtitle}
-                onChange={(e) => setHeroSubtitle(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
-              />
-            </div>
+            {liveAutoSchedule && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 rounded-xl bg-inset border border-brand-soft/40">
+                <div>
+                  <label className="block text-xs font-medium text-ink-2 mb-1">
+                    Início Automático
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={liveStartAt}
+                    onChange={(e) => setLiveStartAt(e.target.value)}
+                    className="w-full px-3.5 py-2 rounded-xl bg-surface border border-line text-xs text-ink focus:outline-none focus:border-brand-soft"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-ink-2 mb-1">
+                    Término Automático
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={liveEndAt}
+                    onChange={(e) => setLiveEndAt(e.target.value)}
+                    className="w-full px-3.5 py-2 rounded-xl bg-surface border border-line text-xs text-ink focus:outline-none focus:border-brand-soft"
+                  />
+                </div>
+              </div>
+            )}
 
-            <button
-              type="submit"
-              disabled={isSaving}
-              className="py-2.5 px-6 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
-            >
-              Salvar Configurações
-            </button>
-          </form>
-
-          {/* FERRAMENTAS DE MIGRAÇÃO (A4.1, A4.2 & Fase 1.6) */}
-          <div className="p-6 rounded-2xl bg-surface border border-line shadow-card space-y-5">
-            <div>
-              <h3 className="text-sm font-bold text-ink flex items-center gap-2">
-                <Database className="w-4 h-4 text-brand-soft" />
-                Migrações & Manutenção de Dados
-              </h3>
-              <p className="text-xs text-ink-muted mt-1">
-                Ferramentas para atualizar documentos legados e otimizar imagens existentes.
+            {liveFormError && (
+              <p className="text-xs font-semibold text-danger">
+                {liveFormError}
               </p>
-            </div>
+            )}
 
-            {/* Image Optimization (Fase 1.6) */}
-            <div className="p-4 rounded-xl bg-inset border border-line-soft space-y-3">
-              <div>
-                <h4 className="text-xs font-bold text-ink">
-                  Otimizar imagens existentes
-                </h4>
-                <p className="text-[11px] text-ink-muted mt-0.5">
-                  Recomprime capas de cursos, playlists, miniaturas de aulas e banner acima de 150 KB, salvando apenas se o arquivo final ficar menor.
-                </p>
-              </div>
+            {liveSavedToFolderMsg && (
+              <p className="text-xs font-bold text-emerald-500">
+                {liveSavedToFolderMsg}
+              </p>
+            )}
 
+            <div className="flex flex-wrap items-center gap-2.5 pt-1">
               <button
                 type="button"
-                disabled={optimizingImages}
-                onClick={handleOptimizeExistingImages}
-                className="px-4 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer inline-flex items-center gap-2"
+                disabled={savingLiveToFolder || isSaving}
+                onClick={handleSaveLiveToLivesFolder}
+                className="py-2.5 px-5 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold inline-flex items-center gap-2 transition-colors disabled:opacity-50 cursor-pointer"
               >
-                <ImageIcon className="w-3.5 h-3.5" />
+                <Folder className="w-3.5 h-3.5" />
                 <span>
-                  {optimizingImages
-                    ? 'Otimizando imagens...'
-                    : 'Otimizar imagens existentes'}
+                  {savingLiveToFolder
+                    ? 'Salvando na pasta Lives...'
+                    : 'Salvar na pasta Lives'}
                 </span>
               </button>
 
-              {optimizeImagesMsg && (
-                <p className="text-xs text-brand-accent font-medium">
-                  {optimizeImagesMsg}
-                </p>
+              <button
+                type="submit"
+                disabled={isSaving || savingLiveToFolder}
+                className="py-2.5 px-5 rounded-xl bg-chip hover:bg-chip-hover border border-line text-ink text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                {isSaving ? 'Atualizando...' : 'Atualizar Transmissão'}
+              </button>
+
+              {configSavedNotice && (
+                <span className="text-xs font-bold text-emerald-500">
+                  {configSavedNotice}
+                </span>
               )}
             </div>
 
-            {/* Gabaritos Migration */}
-            <div className="p-4 rounded-xl bg-inset border border-line-soft space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <h4 className="text-xs font-bold text-ink">
-                    Migrar Gabaritos de Simulados (Coleção simuladoKeys)
+            {/* PASTA LIVES (AULAS SALVAS PARA COLOCAR EM CURSOS) */}
+            <div className="pt-4 mt-2 border-t border-line space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Folder className="w-4 h-4 text-brand-soft shrink-0" />
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-ink">
+                    Pasta: Lives ({savedLivesLessons.length})
                   </h4>
-                  <p className="text-[11px] text-ink-muted mt-0.5">
-                    Move o campo answerKey dos simulados para a coleção isolada protegida por regras.
-                  </p>
                 </div>
-                {simuladosWithInlineKey.length > 0 ? (
-                  <span className="px-2.5 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-500 text-[11px] font-bold">
-                    {simuladosWithInlineKey.length} com gabarito legado
-                  </span>
-                ) : (
-                  <span className="px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-500 text-[11px] font-bold inline-flex items-center gap-1">
-                    <ShieldCheck className="w-3.5 h-3.5" />
-                    100% Protegido
-                  </span>
+
+                {livesFolder && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('lessons');
+                      setSelectedLessonFolderId(livesFolder.id);
+                    }}
+                    className="text-xs font-semibold text-brand-accent hover:text-ink transition-colors cursor-pointer"
+                  >
+                    Abrir pasta em Aulas
+                  </button>
                 )}
               </div>
 
-              {simuladosWithInlineKey.length > 0 && (
+              {savedLivesLessons.length === 0 ? (
+                <p className="text-xs text-ink-muted py-2">
+                  Nenhuma live salva na pasta Lives ainda. Preencha o nome e link acima e clique em &ldquo;Salvar na pasta Lives&rdquo;.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {savedLivesLessons.map((lesson) => {
+                    const selectedCourseIdForLive =
+                      selectedCourseByLiveId[lesson.id] || '';
+                    return (
+                      <div
+                        key={lesson.id}
+                        className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl bg-inset border border-line"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span className="px-2 py-0.5 rounded-md bg-chip border border-line text-[10px] font-bold text-ink-2 shrink-0">
+                            {lesson.isFree ? 'Público' : 'Não listado'}
+                          </span>
+                          <span className="text-xs font-bold text-ink truncate">
+                            {lesson.title}
+                          </span>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          {regularCourses.length > 0 && (
+                            <div className="flex items-center gap-1.5">
+                              <select
+                                value={selectedCourseIdForLive}
+                                onChange={(e) =>
+                                  setSelectedCourseByLiveId((prev) => ({
+                                    ...prev,
+                                    [lesson.id]: e.target.value,
+                                  }))
+                                }
+                                className="px-2.5 py-1.5 rounded-lg bg-surface border border-line text-xs text-ink focus:outline-none focus:border-brand-soft"
+                              >
+                                <option value="">Colocar em curso...</option>
+                                {regularCourses.map((c) => (
+                                  <option key={c.id} value={c.id}>
+                                    {c.title}
+                                  </option>
+                                ))}
+                              </select>
+                              <button
+                                type="button"
+                                disabled={
+                                  !selectedCourseIdForLive ||
+                                  addingLiveToCourseId === lesson.id
+                                }
+                                onClick={() =>
+                                  handlePlaceLiveInCourse(
+                                    lesson,
+                                    selectedCourseIdForLive
+                                  )
+                                }
+                                className="px-3 py-1.5 rounded-lg bg-brand hover:bg-brand-hover text-white text-xs font-bold disabled:opacity-40 transition-colors cursor-pointer"
+                              >
+                                {addingLiveToCourseId === lesson.id
+                                  ? '...'
+                                  : 'Colocar'}
+                              </button>
+                            </div>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => onOpenEditLessonModal(lesson)}
+                            className="p-1.5 rounded-lg text-ink-2 hover:text-ink hover:bg-chip-hover transition-colors cursor-pointer"
+                            title="Editar aula"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onDeleteLesson(lesson.id)}
+                            className="p-1.5 rounded-lg text-ink-muted hover:text-rose-500 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                            title="Excluir aula"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* PERSONALIZAÇÃO VISUAL & MARCA */}
+            <div className="pt-4 mt-2 border-t border-line space-y-4">
+              <h3 className="text-sm font-bold text-ink">
+                Personalização Visual & Marca
+              </h3>
+
+              <CleanCoverInput
+                label="Imagem de Plano de Fundo"
+                sizeHint="1080 × 1920 px"
+                value={heroBgUrl}
+                onChange={setHeroBgUrl}
+                targetWidth={IMAGE_DIMENSIONS.PLATFORM_BG.targetWidth}
+                targetHeight={IMAGE_DIMENSIONS.PLATFORM_BG.targetHeight}
+                resetValue=""
+              />
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-ink-2 mb-1">
+                    Nome da Plataforma
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={60}
+                    value={brandName}
+                    onChange={(e) => setBrandName(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-ink-2 mb-1">
+                    Texto do Botão (Alunos Bloqueados)
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={60}
+                    value={heroCtaText}
+                    onChange={(e) => setHeroCtaText(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-ink-2 mb-1">
+                  Título Principal
+                </label>
+                <input
+                  type="text"
+                  maxLength={140}
+                  value={heroTitle}
+                  onChange={(e) => setHeroTitle(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-ink-2 mb-1">
+                  Subtítulo
+                </label>
+                <input
+                  type="text"
+                  maxLength={240}
+                  value={heroSubtitle}
+                  onChange={(e) => setHeroSubtitle(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-inset border border-line text-sm text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-soft/50 focus:border-brand-soft"
+                />
+              </div>
+
+              <div className="pt-1">
                 <button
-                  type="button"
-                  disabled={migratingKeys}
-                  onClick={handleMigrateGabaritos}
-                  className="px-4 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer inline-flex items-center gap-2"
+                  type="submit"
+                  disabled={isSaving}
+                  className="py-2.5 px-6 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer"
                 >
-                  <KeyRound className="w-3.5 h-3.5" />
-                  <span>
-                    {migratingKeys
-                      ? 'Migrando...'
-                      : `Migrar ${simuladosWithInlineKey.length} Gabarito(s)`}
-                  </span>
+                  {isSaving ? 'Salvando...' : 'Salvar Marca'}
                 </button>
-              )}
-
-              {migrationKeysMsg && (
-                <p className="text-xs text-brand-accent font-medium">
-                  {migrationKeysMsg}
-                </p>
-              )}
-            </div>
-
-            {/* Free PDFs Migration */}
-            <div className="p-4 rounded-xl bg-inset border border-line-soft space-y-3">
-              <div>
-                <h4 className="text-xs font-bold text-ink">
-                  Marcar PDFs de Aulas Grátis
-                </h4>
-                <p className="text-[11px] text-ink-muted mt-0.5">
-                  Atualiza todas as partes de PDFs (pdfChunks) vinculadas a aulas gratuitas com o campo isFree: true.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                disabled={migratingPdfs}
-                onClick={handleMigrateFreePdfs}
-                className="px-4 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer inline-flex items-center gap-2"
-              >
-                <Database className="w-3.5 h-3.5" />
-                <span>
-                  {migratingPdfs ? 'Atualizando...' : 'Marcar PDFs Grátis'}
-                </span>
-              </button>
-
-              {migrationPdfsMsg && (
-                <p className="text-xs text-brand-accent font-medium">
-                  {migrationPdfsMsg}
-                </p>
-              )}
-            </div>
-          </div>
-
-          {/* CHECKLIST DE SEGURANÇA NO CONSOLE FIREBASE (A6.4) */}
-          <div className="p-6 rounded-2xl bg-surface-2 border border-brand-soft/40 shadow-card space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-brand/20 border border-brand/40 text-brand-accent flex items-center justify-center shrink-0">
-                <ShieldCheck className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-ink">
-                  Checklist de Segurança do Console Firebase (Ações Manuais)
-                </h3>
-                <p className="text-xs text-brand-accent mt-0.5">
-                  Itens que devem ser configurados diretamente no Console do Firebase e Google Cloud.
-                </p>
               </div>
             </div>
-
-            <div className="space-y-3 pt-1 text-xs text-ink-2">
-              <div className="p-3.5 rounded-xl bg-inset border border-line-soft space-y-1">
-                <div className="flex items-center gap-2 text-ink font-semibold">
-                  <span className="w-5 h-5 rounded-full bg-brand/20 text-brand-accent flex items-center justify-center text-[10px] font-bold">
-                    1
-                  </span>
-                  <span>Firebase App Check</span>
-                </div>
-                <p className="text-ink-muted text-[11px] pl-7">
-                  No Firebase Console → App Check: registre a aplicação Web com reCAPTCHA Enterprise (ou Play Integrity no Android) e ative a imposição (Enforcement) para Cloud Firestore e Storage. Isso impede scraping direto de chamadas de fora do seu domínio.
-                </p>
-              </div>
-
-              <div className="p-3.5 rounded-xl bg-inset border border-line-soft space-y-1">
-                <div className="flex items-center gap-2 text-ink font-semibold">
-                  <span className="w-5 h-5 rounded-full bg-brand/20 text-brand-accent flex items-center justify-center text-[10px] font-bold">
-                    2
-                  </span>
-                  <span>Restrição da API Key (Google Cloud Console)</span>
-                </div>
-                <p className="text-ink-muted text-[11px] pl-7">
-                  Acesse Google Cloud Console → APIs e Serviços → Credenciais. Selecione a API Key do projeto e aplique restrições de aplicativo (Referenciadores HTTP: adicione apenas o seu domínio oficial) e restrições de API (selecione apenas Cloud Firestore API, Firebase Authentication API e Cloud Storage).
-                </p>
-              </div>
-
-              <div className="p-3.5 rounded-xl bg-inset border border-line-soft space-y-1">
-                <div className="flex items-center gap-2 text-ink font-semibold">
-                  <span className="w-5 h-5 rounded-full bg-brand/20 text-brand-accent flex items-center justify-center text-[10px] font-bold">
-                    3
-                  </span>
-                  <span>Domínios Autorizados no Firebase Auth</span>
-                </div>
-                <p className="text-ink-muted text-[11px] pl-7">
-                  No Firebase Console → Authentication → Configurações → Domínios Autorizados: certifique-se de que constam apenas o domínio de produção oficial e localhost (para testes). Remova domínios desconhecidos ou expirados.
-                </p>
-              </div>
-
-              <div className="p-3.5 rounded-xl bg-inset border border-line-soft space-y-1">
-                <div className="flex items-center gap-2 text-ink font-semibold">
-                  <span className="w-5 h-5 rounded-full bg-brand/20 text-brand-accent flex items-center justify-center text-[10px] font-bold">
-                    4
-                  </span>
-                  <span>Alertas de Faturamento & Orçamento (Budgets)</span>
-                </div>
-                <p className="text-ink-muted text-[11px] pl-7">
-                  No Google Cloud Console → Faturamento → Orçamentos e Alertas: crie um orçamento com alertas por e-mail (50%, 90% e 100%) para monitorar o consumo do Firestore e do Storage sem surpresas financeiras.
-                </p>
-              </div>
-            </div>
-          </div>
+          </form>
         </div>
       )}
     </div>

@@ -20,9 +20,11 @@ import {
   generateSafeId,
 } from '../types';
 import {
+  ensurePdfUrlChunked,
   runWithConcurrency,
   uploadPdfFileToCloud,
 } from '../utils/pdfStorage';
+import { UploadDiagnosticAlert } from './UploadDiagnosticAlert';
 
 interface SimuladoEditorWindowProps {
   editingSimulado: Simulado | null;
@@ -188,7 +190,9 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
           console.error(`Erro ao subir PDF do simulado "${file.name}":`, err);
           progressByFile[index] = 100;
           updateOverallProgress();
-          failedNames.push(file.name);
+          const detail =
+            err instanceof Error && err.message ? err.message : 'Failed to fetch';
+          failedNames.push(`${file.name} (${detail})`);
         }
       });
 
@@ -203,11 +207,14 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
         setPdfUrl(chosen.pdfUrl);
         setPdfTitle(chosen.pdfTitle);
         setPdfSizeLabel(chosen.sizeLabel);
+        setTitle((prevTitle) =>
+          prevTitle.trim() ? prevTitle : chosen.pdfTitle
+        );
       }
 
       if (failedNames.length > 0) {
         setPdfUploadError(
-          `${failedNames.length} arquivo(s) não puderam ser enviados: ${failedNames.join(', ')}`
+          `Falha ao enviar arquivo(s): ${failedNames.join(', ')}`
         );
       }
     } finally {
@@ -233,6 +240,10 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
         .padEnd(questionCount, 'A')
         .slice(0, questionCount);
 
+      const finalPdfUrl = pdfUrl
+        ? await ensurePdfUrlChunked(pdfUrl, currentUserUid, false)
+        : '';
+
       await onSaveSimulado(
         {
           id,
@@ -242,14 +253,14 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
           timeLimitMinutes: isFreeTime
             ? 0
             : Math.max(1, Math.min(600, Math.round(timeLimitMinutes))),
-          pdfUrl: sanitizeString(pdfUrl, SCHEMA_LIMITS.URL_MAX, ''),
-          pdfTitle: pdfUrl
+          pdfUrl: sanitizeString(finalPdfUrl, SCHEMA_LIMITS.URL_MAX, ''),
+          pdfTitle: finalPdfUrl
             ? sanitizeString(pdfTitle, SCHEMA_LIMITS.TITLE_MAX, 'Simulado.pdf')
             : '',
           answerKey: isNew || keyDirty ? normalizedKey : '',
           resultsReleased,
           isPublished: true,
-          authorId: editingSimulado?.authorId || currentUserUid,
+          authorId: currentUserUid,
         },
         isNew
       );
@@ -441,19 +452,12 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
                 </button>
               )}
 
-              <input
-                ref={pdfInputRef}
-                type="file"
-                accept="application/pdf,.pdf"
-                onChange={handleUploadPdf}
-                className="hidden"
-              />
-
-              <button
-                type="button"
-                disabled={isUploadingPdf}
-                onClick={() => pdfInputRef.current?.click()}
-                className="px-3.5 py-2 rounded-xl bg-brand hover:bg-brand-hover disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer"
+              <label
+                className={`px-3.5 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap transition-colors ${
+                  isUploadingPdf
+                    ? 'opacity-50 pointer-events-none'
+                    : 'cursor-pointer'
+                }`}
               >
                 <Upload className="w-3.5 h-3.5 shrink-0" />
                 <span className="whitespace-nowrap">
@@ -463,12 +467,23 @@ export const SimuladoEditorWindow: React.FC<SimuladoEditorWindowProps> = ({
                       ? 'Trocar PDF'
                       : 'Enviar PDF'}
                 </span>
-              </button>
+                <input
+                  ref={pdfInputRef}
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  disabled={isUploadingPdf}
+                  onChange={handleUploadPdf}
+                  className="hidden"
+                />
+              </label>
             </div>
           </div>
 
           {pdfUploadError && (
-            <span className="text-xs text-danger">{pdfUploadError}</span>
+            <UploadDiagnosticAlert
+              error={pdfUploadError}
+              onDismiss={() => setPdfUploadError(null)}
+            />
           )}
         </div>
 

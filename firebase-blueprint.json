@@ -408,7 +408,7 @@
     },
     "PlatformConfig": {
       "title": "PlatformConfig",
-      "description": "Global branding and hero showcase configuration.",
+      "description": "Global branding, hero showcase, and YouTube Live broadcast configuration.",
       "type": "object",
       "properties": {
         "brandName": {
@@ -428,6 +428,40 @@
         },
         "restrictToStudentList": {
           "type": "boolean"
+        },
+        "liveEnabled": {
+          "type": "boolean"
+        },
+        "liveAutoSchedule": {
+          "type": "boolean"
+        },
+        "liveChannelId": {
+          "type": "string"
+        },
+        "liveTitle": {
+          "type": "string"
+        },
+        "liveDescription": {
+          "type": "string"
+        },
+        "liveYoutubeUrl": {
+          "type": "string"
+        },
+        "liveStartAt": {
+          "type": "string"
+        },
+        "liveEndAt": {
+          "type": "string"
+        },
+        "liveChatEnabled": {
+          "type": "boolean"
+        },
+        "liveIsFree": {
+          "type": "boolean"
+        },
+        "livePdfs": {
+          "type": "array",
+          "items": { "$ref": "#/entities/PdfAttachment" }
         },
         "updatedBy": {
           "type": "string"
@@ -758,6 +792,29 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "LiveChatMessage": {
+      "title": "LiveChatMessage",
+      "description": "Real-time chat message sent by students or admin during a live broadcast.",
+      "type": "object",
+      "properties": {
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "authorPhotoUrl": { "type": "string" },
+        "isAdminAuthor": { "type": "boolean" },
+        "text": { "type": "string" },
+        "createdAtMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "authorId",
+        "authorName",
+        "authorPhotoUrl",
+        "isAdminAuthor",
+        "text",
+        "createdAtMs",
+        "createdAt"
+      ]
     }
   },
   "firestore": {
@@ -825,6 +882,10 @@
     "/calendarEvents/{eventId}": {
       "schema": { "$ref": "#/entities/CalendarEvent" },
       "description": "Course calendar events and weekly topics."
+    },
+    "/liveChatMessages/{messageId}": {
+      "schema": { "$ref": "#/entities/LiveChatMessage" },
+      "description": "Real-time student and teacher chat messages during live streams."
     }
   }
 }

@@ -157,8 +157,30 @@ export interface PlatformConfig {
   heroCtaText: string;
   heroBgUrl?: string;
   restrictToStudentList: boolean;
+  liveEnabled?: boolean;
+  liveAutoSchedule?: boolean;
+  liveChannelId?: string;
+  liveTitle?: string;
+  liveDescription?: string;
+  liveYoutubeUrl?: string;
+  liveStartAt?: string;
+  liveEndAt?: string;
+  liveChatEnabled?: boolean;
+  liveIsFree?: boolean;
+  livePdfs?: PdfAttachment[];
   updatedBy: string;
   updatedAt?: Timestamp;
+}
+
+export interface LiveChatMessage {
+  id: string;
+  authorId: string;
+  authorName: string;
+  authorPhotoUrl: string;
+  isAdminAuthor: boolean;
+  text: string;
+  createdAtMs: number;
+  createdAt?: Timestamp;
 }
 
 export type EnemArea = 'MT' | 'CN' | 'CH' | 'LC';
@@ -359,9 +381,24 @@ export function hasLessonVideo(youtubeId?: string | null): boolean {
   return clean.length >= 5 && clean !== 'no_video';
 }
 
+export function extractYoutubeChannelId(input: string): string {
+  const raw = (input || '').trim();
+  if (!raw) return '';
+  const channelMatch = raw.match(/(UC[a-zA-Z0-9_-]{20,24})/);
+  if (channelMatch && channelMatch[1]) {
+    return channelMatch[1];
+  }
+  return '';
+}
+
 export function extractYoutubeId(input: string): string {
   const raw = (input || '').trim();
   if (!raw || raw === 'no_video') return '';
+
+  const channelId = extractYoutubeChannelId(raw);
+  if (channelId && (raw.includes('/channel/') || raw.startsWith('UC'))) {
+    return channelId;
+  }
 
   try {
     if (raw.includes('youtu.be/')) {
@@ -374,11 +411,18 @@ export function extractYoutubeId(input: string): string {
       const vParam = urlObj.searchParams.get('v');
       if (vParam && SCHEMA_LIMITS.ID_REGEX.test(vParam)) return vParam.slice(0, 64);
 
+      const channelParam = urlObj.searchParams.get('channel');
+      if (channelParam && SCHEMA_LIMITS.ID_REGEX.test(channelParam)) {
+        return channelParam.slice(0, 64);
+      }
+
       const pathParts = urlObj.pathname.split('/').filter(Boolean);
       const embedIdx = pathParts.findIndex((p) => ['embed', 'shorts', 'live', 'v'].includes(p));
       if (embedIdx !== -1 && pathParts[embedIdx + 1]) {
         const id = pathParts[embedIdx + 1].split(/[?&/#]/)[0];
-        if (SCHEMA_LIMITS.ID_REGEX.test(id)) return id.slice(0, 64);
+        if (id !== 'live_stream' && SCHEMA_LIMITS.ID_REGEX.test(id)) {
+          return id.slice(0, 64);
+        }
       }
     }
   } catch {
