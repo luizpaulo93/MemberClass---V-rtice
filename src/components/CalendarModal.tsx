@@ -30,6 +30,7 @@ export interface CalendarModalProps {
   currentUserUid: string;
   students?: Student[];
   userProgress?: UserProgress | null;
+  initialSelectedDate?: string | null;
   onVisibleYearChange?: (year: number) => void;
   onSaveEvent: (
     event: Omit<CalendarEvent, 'createdAt' | 'updatedAt'>,
@@ -578,6 +579,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
   currentUserUid,
   students = [],
   userProgress = null,
+  initialSelectedDate = null,
   onVisibleYearChange,
   onSaveEvent,
   onDeleteEvent,
@@ -612,6 +614,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
   const dragAnchorRef = useRef(null as string | null);
   const dragCurrentRef = useRef(null as string | null);
   const justOpenedPopupRef = useRef(false);
+  const dayEventsPanelRef = useRef<HTMLElement | null>(null);
 
   const [viewMode, setViewMode] = useState<'month' | 'year'>('month');
 
@@ -640,16 +643,21 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       const cur = new Date();
-      const curStr = toDateStr(
+      const fallbackStr = toDateStr(
         cur.getFullYear(),
         cur.getMonth(),
         cur.getDate()
       );
-      setSelectedYear(cur.getFullYear());
-      setSelectedMonth(cur.getMonth());
-      setSelectedDateStr(curStr);
-      setRangeStartStr(curStr);
-      setRangeEndStr(curStr);
+      const targetStr =
+        initialSelectedDate && /^\d{4}-\d{2}-\d{2}$/.test(initialSelectedDate)
+          ? initialSelectedDate
+          : fallbackStr;
+      const parsedTarget = parseYMD(targetStr);
+      setSelectedYear(parsedTarget.y);
+      setSelectedMonth(parsedTarget.m);
+      setSelectedDateStr(targetStr);
+      setRangeStartStr(targetStr);
+      setRangeEndStr(targetStr);
       setIsAddMode(false);
       setIsDragging(false);
       setDragAnchorDate(null);
@@ -663,7 +671,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
       setEditingEventId(null);
       setPopupTitleError('');
     }
-  }, [isOpen]);
+  }, [isOpen, initialSelectedDate]);
 
   // Combine Firestore events with National & Pará Regional holidays with fixed category colors
   const allYearEvents = useMemo(() => {
@@ -893,8 +901,21 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     setIsPopupOpen(true);
   };
 
-  const handleDayClick = (dateStr: string) => {
+  const handleDayClick = (
+    dateStr: string,
+    cellYear?: number,
+    cellMonth0?: number
+  ) => {
     if (justOpenedPopupRef.current) return;
+
+    if (
+      cellYear !== undefined &&
+      cellMonth0 !== undefined &&
+      (cellYear !== selectedYear || cellMonth0 !== selectedMonth)
+    ) {
+      setSelectedYear(cellYear);
+      setSelectedMonth(cellMonth0);
+    }
 
     if (isAdmin && isAddMode) {
       setRangeStartStr(dateStr);
@@ -907,6 +928,15 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     setSelectedDateStr(dateStr);
     setRangeStartStr(dateStr);
     setRangeEndStr(dateStr);
+
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      window.setTimeout(() => {
+        dayEventsPanelRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'nearest',
+        });
+      }, 60);
+    }
   };
 
   const handleDayMouseDown = (dateStr: string) => {
@@ -1202,40 +1232,46 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
       </header>
 
       {/* MAIN SCREEN BODY */}
-      <main className="flex-1 w-full max-w-5xl mx-auto px-3 sm:px-6 md:px-8 py-5 sm:py-7 pb-24 md:pb-8 space-y-6">
+      <main className="flex-1 w-full max-w-6xl mx-auto px-3 sm:px-6 md:px-8 py-5 sm:py-7 pb-24 md:pb-10 space-y-6">
         {/* MONTH SWITCHER */}
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={
-              viewMode === 'year'
-                ? () => setSelectedYear((y) => y - 1)
-                : handlePrevMonth
-            }
-            className="w-8 h-8 rounded-full bg-chip hover:bg-chip-hover text-ink-2 flex items-center justify-center transition-colors cursor-pointer"
-            title="Mês anterior"
-          >
-            <ChevronLeft className="w-4 h-4 text-brand-soft" />
-          </button>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={
+                viewMode === 'year'
+                  ? () => setSelectedYear((y) => y - 1)
+                  : handlePrevMonth
+              }
+              className="w-8 h-8 rounded-full bg-chip hover:bg-chip-hover text-ink-2 flex items-center justify-center transition-colors cursor-pointer"
+              title="Mês anterior"
+            >
+              <ChevronLeft className="w-4 h-4 text-brand-soft" />
+            </button>
 
-          <span className="text-base sm:text-lg font-extrabold text-ink px-1">
-            {viewMode === 'year'
-              ? `Ano ${selectedYear}`
-              : `${MONTH_NAMES[selectedMonth]} ${selectedYear}`}
-          </span>
+            <span className="text-base sm:text-lg font-extrabold text-ink px-1">
+              {viewMode === 'year'
+                ? `Ano ${selectedYear}`
+                : `${MONTH_NAMES[selectedMonth]} ${selectedYear}`}
+            </span>
 
-          <button
-            type="button"
-            onClick={
-              viewMode === 'year'
-                ? () => setSelectedYear((y) => y + 1)
-                : handleNextMonth
-            }
-            className="w-8 h-8 rounded-full bg-chip hover:bg-chip-hover text-ink-2 flex items-center justify-center transition-colors cursor-pointer"
-            title="Próximo mês"
-          >
-            <ChevronRight className="w-4 h-4 text-brand-soft" />
-          </button>
+            <button
+              type="button"
+              onClick={
+                viewMode === 'year'
+                  ? () => setSelectedYear((y) => y + 1)
+                  : handleNextMonth
+              }
+              className="w-8 h-8 rounded-full bg-chip hover:bg-chip-hover text-ink-2 flex items-center justify-center transition-colors cursor-pointer"
+              title="Próximo mês"
+            >
+              <ChevronRight className="w-4 h-4 text-brand-soft" />
+            </button>
+          </div>
+
+          <p className="text-xs font-medium text-ink-muted">
+            Clique em qualquer data para ver os eventos do dia
+          </p>
         </div>
 
         {/* VIEW MODE 1: FULL YEAR OVERVIEW (12 MONTHS) */}
@@ -1335,368 +1371,392 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
             })}
           </div>
         ) : (
-          /* VIEW MODE 2: BORDERLESS MONTH CALENDAR */
-          <div
-            onTouchMove={handleTouchMove}
-            onTouchEnd={handleTouchEnd}
-            onTouchCancel={handleTouchCancel}
-            className={`w-full select-none space-y-2.5 py-1 ${
-              isAddMode ? 'touch-none' : 'touch-auto'
-            }`}
-          >
-            {/* Weekdays Labels */}
-            <div className="grid grid-cols-7 text-center pb-2.5 border-b border-line-soft">
-              {WEEKDAYS_SHORT.map((wd) => (
-                <div
-                  key={wd}
-                  className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-ink-muted py-0.5"
-                >
-                  {wd}
-                </div>
-              ))}
+          /* VIEW MODE 2: RESPONSIVE SPLIT LAYOUT (CALENDAR ON LEFT, CLICKED DAY EVENTS ON RIGHT FOR TABLET/PC) */
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
+            <div
+              onTouchMove={handleTouchMove}
+              onTouchEnd={handleTouchEnd}
+              onTouchCancel={handleTouchCancel}
+              className={`md:col-span-7 w-full p-3 sm:p-5 rounded-3xl bg-surface border border-line shadow-card select-none space-y-2.5 ${
+                isAddMode ? 'touch-none' : 'touch-auto'
+              }`}
+            >
+              {/* Weekdays Labels */}
+              <div className="grid grid-cols-7 text-center pb-2.5 border-b border-line-soft">
+                {WEEKDAYS_SHORT.map((wd) => (
+                  <div
+                    key={wd}
+                    className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-ink-muted py-0.5"
+                  >
+                    {wd}
+                  </div>
+                ))}
+              </div>
+
+              {/* Weeks Matrix */}
+              <div className="space-y-1 sm:space-y-1.5 pt-1">
+                {monthWeeksMatrix.map((weekRow, rowIdx) => (
+                  <div key={rowIdx} className="grid grid-cols-7 relative">
+                    {weekRow.map((cell, colIdx) => {
+                      const { dateStr, dayNumber, month0, year, isCurrentMonth } =
+                        cell;
+
+                      const hasActiveRange = Boolean(
+                        activeRange.start && activeRange.end
+                      );
+                      const isInActiveRange =
+                        isAddMode &&
+                        hasActiveRange &&
+                        dateStr >= activeRange.start &&
+                        dateStr <= activeRange.end;
+                      const isRangeStart =
+                        hasActiveRange && dateStr === activeRange.start;
+                      const isRangeEnd =
+                        hasActiveRange && dateStr === activeRange.end;
+
+                      const isSelected =
+                        Boolean(selectedDateStr) && dateStr === selectedDateStr;
+                      const isToday = dateStr === todayStr;
+
+                      const dayEvents = allYearEvents.filter(
+                        (ev) => dateStr >= ev.startDate && dateStr <= ev.endDate
+                      );
+                      const multiDayEvent = dayEvents.find(
+                        (ev) => ev.startDate !== ev.endDate
+                      );
+                      const holidayEvent = dayEvents.find(
+                        (ev) =>
+                          ev.category === 'feriado_nacional' ||
+                          ev.category === 'feriado_para'
+                      );
+                      const primaryEvent = multiDayEvent || dayEvents[0] || null;
+                      const pal = primaryEvent
+                        ? COLOR_PALETTE[primaryEvent.color] || COLOR_PALETTE.blue
+                        : COLOR_PALETTE.blue;
+
+                      const isMultiDay = Boolean(multiDayEvent);
+                      const isSingleDayEvent =
+                        !isMultiDay &&
+                        primaryEvent &&
+                        primaryEvent.startDate === primaryEvent.endDate;
+
+                      const eventsWithDots = dayEvents.filter(
+                        (ev) =>
+                          ev.category === 'simulado' ||
+                          ev.category === 'revisao' ||
+                          ev.category === 'evento_curso'
+                      );
+
+                      const dayBirthdays = allBirthdays.filter(
+                        (b) => b.day === dayNumber && b.month0 === month0
+                      );
+
+                      const getMultiDayBandClasses = (ev: CalendarEvent) => {
+                        const isStartOfEvent = dateStr === ev.startDate;
+                        const isEndOfEvent = dateStr === ev.endDate;
+                        const isRowStart = colIdx === 0;
+                        const isRowEnd = colIdx === 6;
+
+                        if (isStartOfEvent && isEndOfEvent) {
+                          return 'left-1 right-1 rounded-full border-x';
+                        }
+                        if (isStartOfEvent) {
+                          return 'left-1 right-0 rounded-l-full border-l';
+                        }
+                        if (isEndOfEvent) {
+                          return 'left-0 right-1 rounded-r-full border-r';
+                        }
+                        if (isRowStart) {
+                          return 'left-0 right-0 rounded-l-none';
+                        }
+                        if (isRowEnd) {
+                          return 'left-0 right-0 rounded-r-none';
+                        }
+                        return 'left-0 right-0 rounded-none';
+                      };
+
+                      const getDragBandClasses = () => {
+                        const isSingleDay = activeRange.start === activeRange.end;
+                        if (isSingleDay) {
+                          return 'left-1 right-1 rounded-full border-x';
+                        }
+                        if (isRangeStart) {
+                          return 'left-1 right-0 rounded-l-full border-l';
+                        }
+                        if (isRangeEnd) {
+                          return 'left-0 right-1 rounded-r-full border-r';
+                        }
+                        if (colIdx === 0) {
+                          return 'left-0 right-0 rounded-l-none';
+                        }
+                        if (colIdx === 6) {
+                          return 'left-0 right-0 rounded-r-none';
+                        }
+                        return 'left-0 right-0 rounded-none';
+                      };
+
+                      const getCircleClasses = () => {
+                        if (isInActiveRange) {
+                          if (isRangeStart || isRangeEnd) {
+                            return 'bg-emerald-500 text-white shadow-[0_0_14px_rgba(16,185,129,0.9)] scale-105';
+                          }
+                          return 'text-emerald-200 [html.theme-light_&]:text-emerald-800 font-bold';
+                        }
+
+                        if (isSelected) {
+                          return 'bg-brand text-white shadow-glow-md scale-105 ring-2 ring-white/60 keep-white-text';
+                        }
+
+                        if (isToday) {
+                          return 'border-2 border-brand-soft text-ink font-extrabold bg-brand/20 shadow-glow-sm';
+                        }
+
+                        if (holidayEvent) {
+                          return 'bg-rose-500/25 border-2 border-rose-500/80 text-rose-100 [html.theme-light_&]:text-rose-800 font-extrabold shadow-[0_0_12px_rgba(244,63,94,0.4)]';
+                        }
+
+                        if (isSingleDayEvent) {
+                          return `${pal.circleBg} border-2 ${pal.accentBorder} text-ink font-extrabold shadow-sm`;
+                        }
+
+                        if (isMultiDay) {
+                          return 'text-ink font-extrabold';
+                        }
+
+                        if (isCurrentMonth) {
+                          return 'text-ink-2 group-hover:bg-chip-hover';
+                        }
+
+                        return 'text-ink-faint group-hover:text-ink-muted';
+                      };
+
+                      return (
+                        <div
+                          key={dateStr}
+                          data-calendar-date={dateStr}
+                          onClick={() => handleDayClick(dateStr, year, month0)}
+                          onMouseDown={() => handleDayMouseDown(dateStr)}
+                          onMouseEnter={() => handleDayMouseEnter(dateStr)}
+                          onMouseUp={() => handleDayMouseUp(dateStr)}
+                          onTouchStart={() => handleTouchStart(dateStr)}
+                          className="relative flex items-center justify-center h-13 sm:h-15 cursor-pointer group transition-all select-none"
+                        >
+                          {/* MULTI-DAY EVENT CONTINUOUS BAND */}
+                          {isMultiDay && !isInActiveRange && (
+                            <div
+                              className={`absolute top-1/2 -translate-y-1/2 h-9 sm:h-10 pointer-events-none transition-all z-0 ${
+                                pal.highlighterBg
+                              } border-y ${pal.accentBorder} ${getMultiDayBandClasses(
+                                primaryEvent
+                              )}`}
+                            />
+                          )}
+
+                          {/* DRAG / ACTIVE RANGE HIGHLIGHT BAND */}
+                          {isInActiveRange && (
+                            <div
+                              className={`absolute top-1/2 -translate-y-1/2 h-9 sm:h-10 pointer-events-none bg-emerald-500/25 border-y border-emerald-400/40 z-0 ${getDragBandClasses()}`}
+                            />
+                          )}
+
+                          {/* TINY BIRTHDAY CAKE SYMBOL ON TOP */}
+                          {dayBirthdays.length > 0 && (
+                            <span
+                              className="absolute top-0.5 left-1/2 -translate-x-1/2 text-[9px] sm:text-[10px] leading-none select-none pointer-events-none z-20 filter drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]"
+                              title={`Aniversariante(s): ${dayBirthdays
+                                .map((b) => b.name)
+                                .join(', ')}`}
+                            >
+                              🎂
+                            </span>
+                          )}
+
+                          {/* PERFECT CIRCULAR DAY NUMBER */}
+                          <div
+                            className={`relative z-10 w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-xs sm:text-sm font-extrabold aspect-square select-none transition-all ${getCircleClasses()}`}
+                          >
+                            {dayNumber}
+                          </div>
+
+                          {/* PURE COLOR EVENT DOTS */}
+                          {eventsWithDots.length > 0 && (
+                            <div className="absolute bottom-1 inset-x-0 flex items-center justify-center gap-1 pointer-events-none z-20">
+                              {eventsWithDots.slice(0, 3).map((ev) => {
+                                const p =
+                                  COLOR_PALETTE[ev.color] || COLOR_PALETTE.blue;
+                                return (
+                                  <span
+                                    key={ev.id}
+                                    title={ev.title}
+                                    className={`w-1.5 h-1.5 rounded-full ${p.dotBg} shadow-sm shrink-0`}
+                                  />
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
             </div>
 
-            {/* Weeks Matrix */}
-            <div className="space-y-1 sm:space-y-1.5 pt-1">
-              {monthWeeksMatrix.map((weekRow, rowIdx) => (
-                <div key={rowIdx} className="grid grid-cols-7 relative">
-                  {weekRow.map((cell, colIdx) => {
-                    const { dateStr, dayNumber, month0, isCurrentMonth } = cell;
+            {/* RIGHT SIDE PANEL ON TABLET/PC & BELOW ON MOBILE: EVENTS FOR THE CLICKED DAY */}
+            <section
+              ref={dayEventsPanelRef}
+              className="md:col-span-5 md:sticky md:top-20 p-4 sm:p-5 rounded-3xl bg-surface border border-line shadow-card space-y-4"
+            >
+              <div className="flex items-center justify-between gap-2 pb-3 border-b border-line">
+                <div className="min-w-0">
+                  <span className="block text-[10px] font-extrabold uppercase tracking-wider text-brand-accent">
+                    Dia selecionado
+                  </span>
+                  <h2 className="text-sm sm:text-base font-extrabold text-ink truncate">
+                    {selectedDateStr
+                      ? `${formatShortDate(selectedDateStr)} de ${selectedYear}`
+                      : 'Selecione uma data'}
+                  </h2>
+                </div>
 
-                    const hasActiveRange = Boolean(
-                      activeRange.start && activeRange.end
-                    );
-                    const isInActiveRange =
-                      isAddMode &&
-                      hasActiveRange &&
-                      dateStr >= activeRange.start &&
-                      dateStr <= activeRange.end;
-                    const isRangeStart =
-                      hasActiveRange && dateStr === activeRange.start;
-                    const isRangeEnd =
-                      hasActiveRange && dateStr === activeRange.end;
+                {isAdmin && selectedDateStr && (
+                  <button
+                    type="button"
+                    onClick={() => openPopupForRange(selectedDateStr, selectedDateStr)}
+                    className="px-3 py-1.5 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold inline-flex items-center gap-1.5 shrink-0 transition-colors cursor-pointer keep-white-text"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Novo evento</span>
+                  </button>
+                )}
+              </div>
 
-                    const isSelected =
-                      Boolean(selectedDateStr) && dateStr === selectedDateStr;
-                    const isToday = dateStr === todayStr;
+              {!selectedDateStr ? (
+                <div className="p-5 rounded-2xl bg-inset border border-line-soft text-center">
+                  <p className="text-xs sm:text-sm font-semibold text-ink-muted">
+                    Clique em qualquer dia do calendário para ver os eventos.
+                  </p>
+                </div>
+              ) : selectedScheduleEvents.length === 0 &&
+                selectedDateBirthdays.length === 0 ? (
+                <div className="p-5 rounded-2xl bg-inset border border-line-soft text-center space-y-1">
+                  <p className="text-xs sm:text-sm font-bold text-ink">
+                    Nenhum evento neste dia
+                  </p>
+                  <p className="text-xs text-ink-muted">
+                    Não há aulas especiais, simulados ou eventos agendados para{' '}
+                    {formatShortDate(selectedDateStr)}.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-[55dvh] overflow-y-auto pr-1">
+                  {/* BIRTHDAY CARDS */}
+                  {selectedDateBirthdays.map((b) => (
+                    <div
+                      key={`bday-${b.id}`}
+                      className="p-3.5 rounded-2xl bg-gradient-to-r from-amber-500/15 via-amber-500/10 to-transparent border border-amber-400/40 flex items-start justify-between gap-3"
+                    >
+                      <div className="flex items-start gap-3 min-w-0">
+                        <div className="w-8 h-8 rounded-full bg-amber-500/25 border border-amber-400/50 text-amber-400 [html.theme-light_&]:text-amber-700 flex items-center justify-center shrink-0 mt-0.5">
+                          <Cake className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-extrabold text-amber-400 [html.theme-light_&]:text-amber-800 uppercase tracking-wider">
+                              🎂 Aniversariante
+                            </span>
+                          </div>
+                          <h3 className="text-sm font-extrabold text-ink truncate">
+                            {b.name}
+                          </h3>
+                          <p className="text-xs text-ink-2 font-medium">
+                            Dia de celebrar mais um ano de vida e conquistas!
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
 
-                    const dayEvents = allYearEvents.filter(
-                      (ev) => dateStr >= ev.startDate && dateStr <= ev.endDate
-                    );
-                    const multiDayEvent = dayEvents.find(
-                      (ev) => ev.startDate !== ev.endDate
-                    );
-                    const holidayEvent = dayEvents.find(
-                      (ev) =>
-                        ev.category === 'feriado_nacional' ||
-                        ev.category === 'feriado_para'
-                    );
-                    const primaryEvent = multiDayEvent || dayEvents[0] || null;
-                    const pal = primaryEvent
-                      ? COLOR_PALETTE[primaryEvent.color] || COLOR_PALETTE.blue
-                      : COLOR_PALETTE.blue;
-
-                    const isMultiDay = Boolean(multiDayEvent);
-                    const isSingleDayEvent =
-                      !isMultiDay && primaryEvent && primaryEvent.startDate === primaryEvent.endDate;
-
-                    const eventsWithDots = dayEvents.filter(
-                      (ev) =>
-                        ev.category === 'simulado' ||
-                        ev.category === 'revisao' ||
-                        ev.category === 'evento_curso'
-                    );
-
-                    const dayBirthdays = allBirthdays.filter(
-                      (b) => b.day === dayNumber && b.month0 === month0
-                    );
-
-                    const getMultiDayBandClasses = (ev: CalendarEvent) => {
-                      const isStartOfEvent = dateStr === ev.startDate;
-                      const isEndOfEvent = dateStr === ev.endDate;
-                      const isRowStart = colIdx === 0;
-                      const isRowEnd = colIdx === 6;
-
-                      if (isStartOfEvent && isEndOfEvent) {
-                        return 'left-1 right-1 rounded-full border-x';
-                      }
-                      if (isStartOfEvent) {
-                        return 'left-1 right-0 rounded-l-full border-l';
-                      }
-                      if (isEndOfEvent) {
-                        return 'left-0 right-1 rounded-r-full border-r';
-                      }
-                      if (isRowStart) {
-                        return 'left-0 right-0 rounded-l-none';
-                      }
-                      if (isRowEnd) {
-                        return 'left-0 right-0 rounded-r-none';
-                      }
-                      return 'left-0 right-0 rounded-none';
-                    };
-
-                    const getDragBandClasses = () => {
-                      const isSingleDay = activeRange.start === activeRange.end;
-                      if (isSingleDay) {
-                        return 'left-1 right-1 rounded-full border-x';
-                      }
-                      if (isRangeStart) {
-                        return 'left-1 right-0 rounded-l-full border-l';
-                      }
-                      if (isRangeEnd) {
-                        return 'left-0 right-1 rounded-r-full border-r';
-                      }
-                      if (colIdx === 0) {
-                        return 'left-0 right-0 rounded-l-none';
-                      }
-                      if (colIdx === 6) {
-                        return 'left-0 right-0 rounded-r-none';
-                      }
-                      return 'left-0 right-0 rounded-none';
-                    };
-
-                    const getCircleClasses = () => {
-                      if (isInActiveRange) {
-                        if (isRangeStart || isRangeEnd) {
-                          return 'bg-emerald-500 text-white shadow-[0_0_14px_rgba(16,185,129,0.9)] scale-105';
-                        }
-                        return 'text-emerald-200 [html.theme-light_&]:text-emerald-800 font-bold';
-                      }
-
-                      if (isSelected) {
-                        return 'bg-brand text-white shadow-glow-md scale-105 ring-2 ring-white/60';
-                      }
-
-                      if (isToday) {
-                        return 'border-2 border-brand-soft text-ink font-extrabold bg-brand/20 shadow-glow-sm';
-                      }
-
-                      if (holidayEvent) {
-                        return 'bg-rose-500/25 border-2 border-rose-500/80 text-rose-100 [html.theme-light_&]:text-rose-800 font-extrabold shadow-[0_0_12px_rgba(244,63,94,0.4)]';
-                      }
-
-                      if (isSingleDayEvent) {
-                        return `${pal.circleBg} border-2 ${pal.accentBorder} text-ink font-extrabold shadow-sm`;
-                      }
-
-                      if (isMultiDay) {
-                        return 'text-ink font-extrabold';
-                      }
-
-                      if (isCurrentMonth) {
-                        return 'text-ink-2 group-hover:bg-chip-hover';
-                      }
-
-                      return 'text-ink-faint group-hover:text-ink-muted';
-                    };
+                  {/* EVENT CARDS */}
+                  {selectedScheduleEvents.map((ev) => {
+                    const pal = COLOR_PALETTE[ev.color] || COLOR_PALETTE.blue;
+                    const isSystemHoliday = ev.authorId === 'system';
+                    const spansMultipleDays = ev.startDate !== ev.endDate;
 
                     return (
                       <div
-                        key={dateStr}
-                        data-calendar-date={dateStr}
-                        onClick={() => handleDayClick(dateStr)}
-                        onMouseDown={() => handleDayMouseDown(dateStr)}
-                        onMouseEnter={() => handleDayMouseEnter(dateStr)}
-                        onMouseUp={() => handleDayMouseUp(dateStr)}
-                        onTouchStart={() => handleTouchStart(dateStr)}
-                        className="relative flex items-center justify-center h-14 sm:h-16 cursor-pointer group transition-all select-none"
+                        key={ev.id}
+                        className={`relative p-3.5 rounded-2xl bg-inset border ${pal.accentBorder} flex items-start justify-between gap-3 overflow-hidden`}
                       >
-                        {/* MULTI-DAY EVENT CONTINUOUS BAND */}
-                        {isMultiDay && !isInActiveRange && (
-                          <div
-                            className={`absolute top-1/2 -translate-y-1/2 h-9 sm:h-10 pointer-events-none transition-all z-0 ${
-                              pal.highlighterBg
-                            } border-y ${pal.accentBorder} ${getMultiDayBandClasses(
-                              primaryEvent
-                            )}`}
-                          />
-                        )}
-
-                        {/* DRAG / ACTIVE RANGE HIGHLIGHT BAND */}
-                        {isInActiveRange && (
-                          <div
-                            className={`absolute top-1/2 -translate-y-1/2 h-9 sm:h-10 pointer-events-none bg-emerald-500/25 border-y border-emerald-400/40 z-0 ${getDragBandClasses()}`}
-                          />
-                        )}
-
-                        {/* TINY BIRTHDAY CAKE SYMBOL ON TOP */}
-                        {dayBirthdays.length > 0 && (
+                        <div className="flex items-start gap-3 min-w-0">
                           <span
-                            className="absolute top-0.5 left-1/2 -translate-x-1/2 text-[9px] sm:text-[10px] leading-none select-none pointer-events-none z-20 filter drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]"
-                            title={`Aniversariante(s): ${dayBirthdays
-                              .map((b) => b.name)
-                              .join(', ')}`}
-                          >
-                            🎂
-                          </span>
-                        )}
+                            className={`w-2.5 h-2.5 rounded-full ${pal.dotBg} shrink-0 mt-1.5 ${pal.glowClass}`}
+                          />
 
-                        {/* PERFECT CIRCULAR DAY NUMBER */}
-                        <div
-                          className={`relative z-10 w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-xs sm:text-sm font-extrabold aspect-square select-none transition-all ${getCircleClasses()}`}
-                        >
-                          {dayNumber}
+                          <div className="min-w-0 space-y-1">
+                            <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
+                              <span className={pal.badgeText}>
+                                {ev.category === 'assunto_semana'
+                                  ? 'Assunto da Semana'
+                                  : ev.category === 'evento_curso'
+                                    ? 'Evento do Curso'
+                                    : ev.category === 'simulado'
+                                      ? 'Simulado'
+                                      : ev.category === 'revisao'
+                                        ? 'Revisão'
+                                        : ev.category === 'feriado_nacional'
+                                          ? 'Feriado Nacional'
+                                          : 'Feriado Pará'}
+                              </span>
+                              <span className="text-ink-muted">·</span>
+                              <span className="text-brand-soft">
+                                {spansMultipleDays
+                                  ? formatShortDateRange(ev.startDate, ev.endDate)
+                                  : formatShortDate(ev.startDate)}
+                              </span>
+                            </div>
+
+                            <h3 className="text-sm font-extrabold text-ink leading-snug">
+                              {ev.title}
+                            </h3>
+
+                            {ev.description && (
+                              <p className="text-xs text-ink-2 font-medium leading-relaxed">
+                                {ev.description}
+                              </p>
+                            )}
+                          </div>
                         </div>
 
-                        {/* PURE COLOR EVENT DOTS */}
-                        {eventsWithDots.length > 0 && (
-                          <div className="absolute bottom-1 inset-x-0 flex items-center justify-center gap-1 pointer-events-none z-20">
-                            {eventsWithDots.slice(0, 3).map((ev) => {
-                              const p =
-                                COLOR_PALETTE[ev.color] || COLOR_PALETTE.blue;
-                              return (
-                                <span
-                                  key={ev.id}
-                                  title={ev.title}
-                                  className={`w-1.5 h-1.5 rounded-full ${p.dotBg} shadow-sm shrink-0`}
-                                />
-                              );
-                            })}
+                        {/* Admin Edit/Delete */}
+                        {isAdmin && !isSystemHoliday && (
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => openPopupForEdit(ev)}
+                              className="w-7 h-7 rounded-full bg-chip hover:bg-chip-hover text-ink-2 hover:text-ink flex items-center justify-center transition-colors cursor-pointer"
+                              title="Editar"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onDeleteEvent(ev.id)}
+                              className="w-7 h-7 rounded-full bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 flex items-center justify-center transition-colors cursor-pointer"
+                              title="Excluir"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
                           </div>
                         )}
                       </div>
                     );
                   })}
                 </div>
-              ))}
-            </div>
+              )}
+            </section>
           </div>
         )}
-
-        {/* BOTTOM SCHEDULE SECTION */}
-        <section className="pt-2 border-t border-line-soft space-y-3">
-          {!selectedDateStr ? (
-            <div className="p-6 rounded-2xl bg-surface border border-line-soft text-center transform -skew-x-1 sm:-skew-x-2">
-              <p className="text-xs sm:text-sm font-semibold text-ink-muted italic">
-                Nenhuma data selecionada.
-              </p>
-            </div>
-          ) : selectedScheduleEvents.length === 0 &&
-            selectedDateBirthdays.length === 0 ? (
-            <div className="p-6 rounded-2xl bg-surface border border-line-soft text-center transform -skew-x-1 sm:-skew-x-2">
-              <p className="text-xs sm:text-sm font-semibold text-ink-muted italic">
-                Nenhuma programação ou evento agendado para este dia.
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-              {/* BIRTHDAY CARDS */}
-              {selectedDateBirthdays.map((b) => (
-                <div
-                  key={`bday-${b.id}`}
-                  className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-amber-500/10 to-transparent border border-amber-400/40 shadow-[0_4px_20px_rgba(245,158,11,0.15)] flex items-start justify-between gap-3 transform -skew-x-2 transition-transform hover:-skew-x-1"
-                >
-                  <div className="flex items-start gap-3 min-w-0">
-                    <div className="w-8 h-8 rounded-full bg-amber-500/25 border border-amber-400/50 text-amber-400 [html.theme-light_&]:text-amber-700 flex items-center justify-center shrink-0 mt-0.5">
-                      <Cake className="w-4 h-4" />
-                    </div>
-                    <div className="min-w-0 space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-500/20 text-amber-300 [html.theme-light_&]:text-amber-800 italic uppercase tracking-wider">
-                          🎂 Aniversariante
-                        </span>
-                        <span className="text-[10px] font-bold text-amber-400 [html.theme-light_&]:text-amber-700 italic">
-                          Hoje!
-                        </span>
-                      </div>
-                      <h3 className="text-sm sm:text-base font-extrabold text-ink italic tracking-wide truncate">
-                        {b.name}
-                      </h3>
-                      <p className="text-[11px] text-ink-2 italic font-medium">
-                        Dia de celebrar mais um ano de vida e conquistas!
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              ))}
-
-              {/* EVENT CARDS */}
-              {selectedScheduleEvents.map((ev) => {
-                const pal = COLOR_PALETTE[ev.color] || COLOR_PALETTE.blue;
-                const isSystemHoliday = ev.authorId === 'system';
-                const spansMultipleDays = ev.startDate !== ev.endDate;
-
-                return (
-                  <div
-                    key={ev.id}
-                    className={`relative p-4 rounded-2xl bg-surface border ${pal.accentBorder} flex items-start justify-between gap-3 transform -skew-x-2 transition-transform hover:-skew-x-1 overflow-hidden shadow-card`}
-                  >
-                    <div
-                      className={`absolute left-0 top-0 bottom-0 w-1.5 ${pal.pillBg}`}
-                    />
-
-                    <div className="flex items-start gap-3 min-w-0 pl-1.5">
-                      <span
-                        className={`w-3 h-3 rounded-full ${pal.dotBg} shrink-0 mt-1.5 ${pal.glowClass}`}
-                      />
-
-                      <div className="min-w-0 space-y-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span
-                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold italic uppercase tracking-wider ${pal.badgeBg} ${pal.badgeText}`}
-                          >
-                            {ev.category === 'assunto_semana'
-                              ? 'Assunto da Semana'
-                              : ev.category === 'evento_curso'
-                                ? 'Evento do Curso'
-                                : ev.category === 'simulado'
-                                  ? 'Simulado'
-                                  : ev.category === 'revisao'
-                                    ? 'Revisão'
-                                    : ev.category === 'feriado_nacional'
-                                      ? 'Feriado Nacional'
-                                      : 'Feriado Pará'}
-                          </span>
-
-                          <span className="text-[11px] font-bold text-brand-soft italic">
-                            {spansMultipleDays
-                              ? `Período: ${formatShortDateRange(
-                                  ev.startDate,
-                                  ev.endDate
-                                )}`
-                              : formatShortDate(ev.startDate)}
-                          </span>
-                        </div>
-
-                        <h3 className="text-sm sm:text-base font-extrabold text-ink italic tracking-wide leading-snug">
-                          {ev.title}
-                        </h3>
-
-                        {ev.description && (
-                          <p className="text-xs text-ink-2 italic font-medium leading-relaxed">
-                            {ev.description}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Admin Edit/Delete */}
-                    {isAdmin && !isSystemHoliday && (
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => openPopupForEdit(ev)}
-                          className="w-7 h-7 rounded-full bg-chip hover:bg-chip-hover text-ink-2 hover:text-ink flex items-center justify-center transition-colors cursor-pointer"
-                          title="Editar"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => onDeleteEvent(ev.id)}
-                          className="w-7 h-7 rounded-full bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 flex items-center justify-center transition-colors cursor-pointer"
-                          title="Excluir"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
       </main>
 
       {/* POPUP MODAL TO ADD / EDIT EVENT */}

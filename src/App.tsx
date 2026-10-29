@@ -122,6 +122,13 @@ const CalendarModal = React.lazy(() =>
     default: m.CalendarModal,
   }))
 );
+import {
+  getNationalAndParaHolidays,
+  formatShortDate,
+  formatShortDateRange,
+  COLOR_PALETTE,
+  toDateStr,
+} from './components/CalendarModal';
 const SimuladosWindow = React.lazy(() =>
   import('./components/SimuladosWindow').then((m) => ({
     default: m.SimuladosWindow,
@@ -874,9 +881,28 @@ export default function App() {
 
   // Calendar Modal Window State + Visible Year filter (Fase 1.8)
   const [isCalendarModalOpen, setIsCalendarModalOpen] = useState(false);
+  const [calendarInitialDate, setCalendarInitialDate] = useState<string | null>(
+    null
+  );
   const [calendarVisibleYear, setCalendarVisibleYear] = useState<number>(() =>
     new Date().getFullYear()
   );
+
+  const openCalendarOnDate = useCallback((dateStr?: string | null) => {
+    if (dateStr && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+      const yr = Number(dateStr.slice(0, 4));
+      if (!Number.isNaN(yr)) {
+        setCalendarVisibleYear(yr);
+      }
+      setCalendarInitialDate(dateStr);
+    } else {
+      const now = new Date();
+      setCalendarInitialDate(
+        toDateStr(now.getFullYear(), now.getMonth(), now.getDate())
+      );
+    }
+    setIsCalendarModalOpen(true);
+  }, []);
 
   // User Theme State ('dark' | 'light') with persistent storage & smooth 250ms transition
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
@@ -1648,9 +1674,13 @@ export default function App() {
     };
   }, [authResolved, verifiedAuthUid, userEmail, isAdmin, adminCheckDone]);
 
-  // Fase 1.8: Lazy Calendar Events subscription (only when Calendar is open, filtered by visible year)
+  // Fase 1.8: Calendar Events subscription (active on Home screen for Upcoming Events and when Calendar modal is open)
   useEffect(() => {
-    if (!user || !verifiedAuthUid || !isCalendarModalOpen) {
+    if (
+      !user ||
+      !verifiedAuthUid ||
+      (activeNav !== 'home' && !isCalendarModalOpen)
+    ) {
       return;
     }
 
@@ -1676,7 +1706,7 @@ export default function App() {
     );
 
     return () => unsubCalendar();
-  }, [user, verifiedAuthUid, isCalendarModalOpen, calendarVisibleYear]);
+  }, [user, verifiedAuthUid, activeNav, isCalendarModalOpen, calendarVisibleYear]);
 
   // Fase 1.8: Lazy Admin Students subscription (only when Gerenciar or Calendar is open)
   useEffect(() => {
@@ -3960,6 +3990,26 @@ export default function App() {
     const resolvedCourseId = courseId || (parentCourse ? parentCourse.id : null);
     setSelectedCourseId(resolvedCourseId);
     setSelectedPlaylistId(pl.id);
+    setSelectedLessonId(null);
+    setIsLessonsDropdownOpen(false);
+  };
+
+  const startOrResumePlaylist = (pl: Playlist, courseId: string | null) => {
+    if (pl.id === FREE_PLAYLIST_ID) {
+      openFreeModule();
+      return;
+    }
+    if (!canAccessPlaylist(pl)) return;
+    flushPendingWatchProgress();
+    setActivePdf(null);
+    const parentCourse = courseId
+      ? courses.find((c) => c.id === courseId) || null
+      : courses.find(
+          (c) => c.id !== FREE_COURSE_ID && c.playlistIds?.includes(pl.id)
+        ) || null;
+    const resolvedCourseId = courseId || (parentCourse ? parentCourse.id : null);
+    setSelectedCourseId(resolvedCourseId);
+    setSelectedPlaylistId(pl.id);
     const targetLesson = resolveLastWatchedLessonInPlaylist(pl, null);
     setSelectedLessonId(targetLesson ? targetLesson.id : null);
     setIsLessonsDropdownOpen(false);
@@ -4762,6 +4812,33 @@ export default function App() {
     if (!targetLessonId && userProgress?.lastWatchedLessonId) {
       targetLessonId = userProgress.lastWatchedLessonId;
     }
+
+    // Fallback to the first available lesson in liberated courses (or free course) so Continue Watching is always available across all viewports
+    if (!targetLessonId) {
+      for (const course of homeCourses) {
+        for (const plId of course.playlistIds || []) {
+          const pl = playlists.find((p) => p.id === plId);
+          if (!pl) continue;
+          const firstLid = (pl.lessonIds || []).find((id) =>
+            lessons.some((l) => l.id === id)
+          );
+          if (firstLid) {
+            targetLessonId = firstLid;
+            preferredPlaylistId = pl.id;
+            break;
+          }
+        }
+        if (targetLessonId) break;
+      }
+      if (!targetLessonId) {
+        const freeLesson = lessons.find((l) => l.isFree);
+        if (freeLesson) {
+          targetLessonId = freeLesson.id;
+          preferredPlaylistId = FREE_PLAYLIST_ID;
+        }
+      }
+    }
+
     if (!targetLessonId) return null;
 
     const lesson = lessons.find((l) => l.id === targetLessonId);
@@ -4799,9 +4876,16 @@ export default function App() {
 
     const currentTimeSec = meta?.currentTimeSec || 0;
     const durationSec = meta?.durationSec || 0;
-    const progressPercent =
-      durationSec > 0
-        ? Math.min(100, Math.max(4, Math.round((currentTimeSec / durationSec) * 100)))
+    const isLessonCompleted = Boolean(
+      userProgress?.completedLessonIds?.includes(lesson.id)
+    );
+    const progressPercent = isLessonCompleted
+      ? 100
+      : durationSec > 0
+        ? Math.min(
+            100,
+            Math.max(4, Math.round((currentTimeSec / durationSec) * 100))
+          )
         : currentTimeSec > 0
           ? 25
           : 0;
@@ -4820,6 +4904,7 @@ export default function App() {
       currentTimeSec,
       durationSec,
       progressPercent,
+      hasStarted: currentTimeSec > 0 || isLessonCompleted || Boolean(userProgress?.lastWatchedLessonId),
       formattedTime: currentTimeSec > 0 ? formatSec(currentTimeSec) : null,
       formattedDuration:
         durationSec > 0 ? formatSec(durationSec) : lesson.duration || '',
@@ -4829,9 +4914,11 @@ export default function App() {
     playlistWatchMap,
     parsedFirestorePlaylistHistory,
     userProgress?.lastWatchedLessonId,
+    userProgress?.completedLessonIds,
     lessons,
     playlists,
     courses,
+    homeCourses,
     freePlaylistCard,
     freeCourse,
     isBlockedUser,
@@ -4839,6 +4926,83 @@ export default function App() {
     myStudentTurma,
     isAdmin,
   ]);
+
+  const studentProgressSummary = useMemo(() => {
+    const completedSet = new Set(userProgress?.completedLessonIds || []);
+    const allLessonIds = new Set<string>();
+
+    const courseBreakdown = homeCourses.map((course) => {
+      const courseLessonIds = new Set<string>();
+      for (const plId of course.playlistIds || []) {
+        const pl = playlists.find((p) => p.id === plId);
+        if (!pl) continue;
+        for (const lid of pl.lessonIds || []) {
+          if (lessons.some((l) => l.id === lid)) {
+            courseLessonIds.add(lid);
+            allLessonIds.add(lid);
+          }
+        }
+      }
+      const total = courseLessonIds.size;
+      let completed = 0;
+      courseLessonIds.forEach((lid) => {
+        if (completedSet.has(lid)) completed += 1;
+      });
+      const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+      return {
+        course,
+        total,
+        completed,
+        percent,
+      };
+    });
+
+    const totalLessons = allLessonIds.size;
+    let completedLessons = 0;
+    allLessonIds.forEach((lid) => {
+      if (completedSet.has(lid)) completedLessons += 1;
+    });
+    const overallPercent =
+      totalLessons > 0
+        ? Math.round((completedLessons / totalLessons) * 100)
+        : 0;
+
+    return {
+      totalLessons,
+      completedLessons,
+      overallPercent,
+      courseBreakdown,
+    };
+  }, [homeCourses, playlists, lessons, userProgress?.completedLessonIds]);
+
+  const upcomingCalendarEvents = useMemo(() => {
+    const now = new Date();
+    const todayStr = toDateStr(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate()
+    );
+    const currentYear = now.getFullYear();
+    const holidaysCurrent = getNationalAndParaHolidays(currentYear);
+    const holidaysNext = getNationalAndParaHolidays(currentYear + 1);
+    const merged = [
+      ...calendarEvents,
+      ...holidaysCurrent.filter(
+        (h) => !calendarEvents.some((ev) => ev.id === h.id)
+      ),
+      ...holidaysNext.filter(
+        (h) => !calendarEvents.some((ev) => ev.id === h.id)
+      ),
+    ];
+    return merged
+      .filter((ev) => (ev.endDate || ev.startDate) >= todayStr)
+      .sort((a, b) => {
+        const cmp = a.startDate.localeCompare(b.startDate);
+        if (cmp !== 0) return cmp;
+        return a.title.localeCompare(b.title);
+      })
+      .slice(0, 6);
+  }, [calendarEvents]);
 
   const initialDataReady =
     (courses.length > 0 && playlists.length > 0) ||
@@ -5018,22 +5182,20 @@ export default function App() {
             Início
           </button>
 
-          {isAdmin && (
-            <button
-              type="button"
-              onClick={() => {
-                exitClassroom();
-                setIsCalendarModalOpen(true);
-              }}
-              className={`transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                isCalendarModalOpen
-                  ? 'text-ink font-bold'
-                  : 'text-ink-muted hover:text-ink'
-              }`}
-            >
-              Calendário
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => {
+              exitClassroom();
+              openCalendarOnDate(null);
+            }}
+            className={`transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              isCalendarModalOpen
+                ? 'text-ink font-bold'
+                : 'text-ink-muted hover:text-ink'
+            }`}
+          >
+            Calendário
+          </button>
 
           <button
             type="button"
@@ -5556,23 +5718,32 @@ export default function App() {
           </main>
         </SafeErrorBoundary>
       ) : activeCourse && !selectedPlaylistId && !activeLesson ? (
-        /* COURSE PLAYLISTS CARD VIEW */
-        <main className="relative z-10 flex-1 w-full max-w-[1440px] mx-auto px-4 sm:px-8 md:px-14 lg:px-20 py-6 space-y-5">
-          <div className="flex items-center gap-3.5 pb-4 border-b border-line min-w-0">
-            <button
-              type="button"
-              onClick={exitClassroom}
-              className="h-9 px-3.5 rounded-xl bg-surface hover:bg-chip-hover border border-line text-xs font-semibold text-ink-2 hover:text-ink transition-colors shrink-0 inline-flex items-center gap-1.5 cursor-pointer"
-            >
-              <ArrowLeft className="w-3.5 h-3.5 text-brand-soft" />
-              <span>Voltar</span>
-            </button>
+        /* COURSE PLAYLISTS COVERS VIEW (Step 1: Inside a Course -> Shows Playlist Covers across all breakpoints) */
+        <main className="relative z-10 flex-1 w-full max-w-[1440px] mx-auto px-4 sm:px-8 md:px-14 lg:px-20 py-6 space-y-6">
+          <div className="flex flex-wrap items-center justify-between gap-3.5 pb-4 border-b border-line min-w-0">
+            <div className="flex items-center gap-3.5 min-w-0">
+              <button
+                type="button"
+                onClick={exitClassroom}
+                className="h-9 px-3.5 rounded-xl bg-surface hover:bg-chip-hover border border-line text-xs font-semibold text-ink-2 hover:text-ink transition-colors shrink-0 inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <ArrowLeft className="w-3.5 h-3.5 text-brand-soft" />
+                <span>Voltar aos Cursos</span>
+              </button>
 
-            <div className="min-w-0">
-              <h1 className="text-lg sm:text-xl md:text-2xl font-extrabold tracking-tight text-ink truncate">
-                {activeCourse.title}
-              </h1>
+              <div className="min-w-0">
+                <span className="block text-[10px] font-bold uppercase tracking-wider text-brand-accent">
+                  Curso • Playlists
+                </span>
+                <h1 className="text-lg sm:text-xl md:text-2xl font-extrabold tracking-tight text-ink truncate">
+                  {activeCourse.title}
+                </h1>
+              </div>
             </div>
+
+            <span className="px-3 py-1 rounded-full bg-surface border border-line text-xs font-mono font-bold text-ink-2 shrink-0">
+              {coursePlaylists.length} playlist{coursePlaylists.length !== 1 ? 's' : ''}
+            </span>
           </div>
 
           {coursePlaylists.length === 0 ? (
@@ -5581,49 +5752,82 @@ export default function App() {
                 Nenhuma playlist cadastrada neste curso ainda
               </p>
               <p className="text-xs text-ink-muted">
-                Assim que novas playlists forem adicionadas a este curso, elas aparecerão aqui em cards.
+                Assim que novas playlists forem adicionadas a este curso, as capas aparecerão aqui.
               </p>
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-7 gap-3.5 sm:gap-4 md:gap-5">
-              {coursePlaylists.map((pl) => {
-                const plLessonCount = (pl.lessonIds || []).filter((id) =>
-                  lessons.some((l) => l.id === id)
-                ).length;
-                return (
-                  <button
-                    key={pl.id}
-                    type="button"
-                    onClick={() => openPlaylistFromCourse(pl, activeCourse.id)}
-                    className="cover-poster-dark group relative w-full aspect-[2/3] rounded-2xl overflow-hidden border border-white/10 hover:border-[#3b82f6]/80 hover:-translate-y-1 text-left transition-all duration-300 shadow-card cursor-pointer"
-                  >
-                    <CoverArtwork
-                      src={pl.coverUrl}
-                      title={pl.title}
-                      className="w-full h-full"
-                      showBottomPurpleBar
-                    />
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-ink-2">
+                  Escolha uma playlist para ver as aulas
+                </h2>
+              </div>
 
-                    <div className="absolute top-2.5 right-2.5 z-10">
-                      <span className="px-2 py-0.5 rounded-md bg-black/65 border border-white/15 text-[10px] font-mono font-bold text-white keep-white-text">
-                        {plLessonCount} aula{plLessonCount !== 1 ? 's' : ''}
-                      </span>
-                    </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3.5 sm:gap-4 md:gap-5">
+                {coursePlaylists.map((pl) => {
+                  const plLessons = (pl.lessonIds || [])
+                    .map((id) => lessons.find((l) => l.id === id))
+                    .filter((l): l is Lesson => Boolean(l));
+                  const plLessonCount = plLessons.length;
+                  const completedInPl = plLessons.filter((l) =>
+                    userProgress?.completedLessonIds.includes(l.id)
+                  ).length;
+                  const plPercent =
+                    plLessonCount > 0
+                      ? Math.round((completedInPl / plLessonCount) * 100)
+                      : 0;
 
-                    <div className="absolute inset-x-0 bottom-0 p-3.5 sm:p-4 z-10">
-                      <h3 className="text-xs sm:text-sm font-extrabold uppercase tracking-wide text-white line-clamp-2 drop-shadow">
-                        {pl.title}
-                      </h3>
-                    </div>
-                  </button>
-                );
-              })}
+                  return (
+                    <button
+                      key={pl.id}
+                      type="button"
+                      onClick={() => openPlaylistFromCourse(pl, activeCourse.id)}
+                      className="cover-poster-dark group relative w-full aspect-[2/3] rounded-2xl overflow-hidden border border-white/10 hover:border-[#3b82f6]/80 hover:-translate-y-1 text-left transition-all duration-300 shadow-card cursor-pointer"
+                    >
+                      <CoverArtwork
+                        src={pl.coverUrl}
+                        title={pl.title}
+                        className="w-full h-full"
+                        showBottomPurpleBar
+                      />
+
+                      <div className="absolute top-2.5 right-2.5 z-10 flex items-center gap-1.5">
+                        <span className="px-2 py-0.5 rounded-md bg-black/65 border border-white/15 text-[10px] font-mono font-bold text-white keep-white-text">
+                          {plLessonCount} aula{plLessonCount !== 1 ? 's' : ''}
+                        </span>
+                      </div>
+
+                      <div className="absolute inset-x-0 bottom-0 p-3.5 sm:p-4 z-10 space-y-2">
+                        <h3 className="text-xs sm:text-sm font-extrabold uppercase tracking-wide text-white line-clamp-2 drop-shadow">
+                          {pl.title}
+                        </h3>
+                        {plLessonCount > 0 && (
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between text-[10px] font-mono text-white/85 keep-white-text">
+                              <span>
+                                {completedInPl}/{plLessonCount} concluídas
+                              </span>
+                              <span>{plPercent}%</span>
+                            </div>
+                            <div className="w-full h-1 rounded-full bg-white/20 overflow-hidden">
+                              <div
+                                className="h-full bg-brand-soft rounded-full transition-all"
+                                style={{ width: `${plPercent}%` }}
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           )}
         </main>
       ) : activePlaylist && !activeLesson ? (
-        /* EMPTY PLAYLIST FALLBACK VIEW */
-        <main className="relative z-10 flex-1 w-full max-w-5xl mx-auto px-4 md:px-10 py-6 space-y-5">
+        /* PLAYLIST LESSONS VIEW (Step 2: Inside a Playlist -> Shows all lessons of the playlist without dropdown) */
+        <main className="relative z-10 flex-1 w-full max-w-6xl mx-auto px-4 sm:px-8 md:px-12 py-6 space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-line">
             <div className="flex items-center gap-3.5 min-w-0">
               <button
@@ -5639,82 +5843,325 @@ export default function App() {
                 className="h-9 px-3.5 rounded-xl bg-surface hover:bg-chip-hover border border-line text-xs font-semibold text-ink-2 hover:text-ink transition-colors shrink-0 inline-flex items-center gap-1.5 cursor-pointer"
               >
                 <ArrowLeft className="w-3.5 h-3.5 text-brand-soft" />
-                <span>Voltar</span>
+                <span>
+                  {selectedCourseId && selectedCourseId !== FREE_COURSE_ID
+                    ? 'Playlists do Curso'
+                    : 'Voltar'}
+                </span>
               </button>
 
               <div className="flex flex-wrap items-center gap-2 min-w-0">
                 {resolvedCourseForHeader && (
-                  <span className="text-xs sm:text-sm font-bold uppercase tracking-wider text-brand-accent">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (
+                        resolvedCourseForHeader.id &&
+                        resolvedCourseForHeader.id !== FREE_COURSE_ID
+                      ) {
+                        setSelectedCourseId(resolvedCourseForHeader.id);
+                        setSelectedPlaylistId(null);
+                        setSelectedLessonId(null);
+                      }
+                    }}
+                    className="text-xs sm:text-sm font-bold uppercase tracking-wider text-brand-accent hover:underline cursor-pointer truncate"
+                  >
                     {resolvedCourseForHeader.title}
-                  </span>
+                  </button>
                 )}
                 {resolvedCourseForHeader && activePlaylist && (
                   <ArrowRight className="w-4 h-4 text-brand-accent shrink-0" />
                 )}
-                <h1 className="text-sm sm:text-base font-extrabold tracking-tight text-ink">
+                <h1 className="text-sm sm:text-base md:text-lg font-extrabold tracking-tight text-ink truncate">
                   {activePlaylist.title}
                 </h1>
               </div>
             </div>
+
+            {orderedClassroomLessons.length > 0 && (
+              <button
+                type="button"
+                onClick={() =>
+                  startOrResumePlaylist(
+                    activePlaylist,
+                    resolvedCourseForHeader?.id || selectedCourseId
+                  )
+                }
+                className="px-4 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white text-xs font-bold inline-flex items-center gap-2 shadow-glow-sm transition-all cursor-pointer shrink-0 keep-white-text"
+              >
+                <Play className="w-3.5 h-3.5 fill-current" />
+                <span>Assistir Playlist</span>
+              </button>
+            )}
           </div>
 
-          <div className="p-10 rounded-2xl bg-surface border border-line shadow-card text-center space-y-2">
-            <p className="text-sm font-bold text-ink">
-              Nenhuma aula cadastrada nesta playlist ainda
-            </p>
-            <p className="text-xs text-ink-muted">
-              Clique em Voltar para selecionar outra playlist do curso.
-            </p>
+          {/* Playlist Hero Banner */}
+          <div className="p-4 sm:p-6 rounded-2xl bg-surface border border-line shadow-card flex flex-col sm:flex-row items-start sm:items-center gap-5">
+            <div className="w-24 sm:w-28 aspect-[2/3] rounded-xl overflow-hidden border border-white/10 shrink-0 shadow-md">
+              <CoverArtwork
+                src={activePlaylist.coverUrl}
+                title={activePlaylist.title}
+                className="w-full h-full"
+                showBottomPurpleBar
+              />
+            </div>
+
+            <div className="flex-1 min-w-0 space-y-3 w-full">
+              <div>
+                {resolvedCourseForHeader && (
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-brand-accent">
+                    {resolvedCourseForHeader.title}
+                  </span>
+                )}
+                <h2 className="text-lg sm:text-2xl font-extrabold text-ink tracking-tight">
+                  {activePlaylist.title}
+                </h2>
+                {activePlaylist.description && (
+                  <p className="text-xs sm:text-sm text-ink-2 mt-1 line-clamp-2">
+                    {activePlaylist.description}
+                  </p>
+                )}
+              </div>
+
+              {(() => {
+                const total = orderedClassroomLessons.length;
+                const completed = orderedClassroomLessons.filter((l) =>
+                  userProgress?.completedLessonIds.includes(l.id)
+                ).length;
+                const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+                return (
+                  <div className="max-w-md space-y-1.5">
+                    <div className="flex items-center justify-between text-xs font-semibold text-ink-2">
+                      <span>
+                        {completed} de {total} aula{total !== 1 ? 's' : ''} concluída
+                        {completed !== 1 ? 's' : ''}
+                      </span>
+                      <span className="font-mono font-bold text-brand-accent">
+                        {pct}%
+                      </span>
+                    </div>
+                    <div className="w-full h-2 rounded-full bg-chip overflow-hidden">
+                      <div
+                        className="h-full bg-brand-soft rounded-full transition-all"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
           </div>
+
+          {orderedClassroomLessons.length === 0 ? (
+            <div className="p-10 rounded-2xl bg-surface border border-line shadow-card text-center space-y-2">
+              <p className="text-sm font-bold text-ink">
+                Nenhuma aula cadastrada nesta playlist ainda
+              </p>
+              <p className="text-xs text-ink-muted">
+                Clique em Voltar para selecionar outra playlist do curso.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-ink-2 flex items-center gap-2">
+                  <ListVideo className="w-4 h-4 text-brand-soft" />
+                  <span>
+                    Aulas da Playlist ({orderedClassroomLessons.length})
+                  </span>
+                </h3>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                {orderedClassroomLessons.map((lesson, idx) => {
+                  const isDone = Boolean(
+                    userProgress?.completedLessonIds.includes(lesson.id)
+                  );
+                  const watchMeta = lessonWatchMap[lesson.id];
+                  const watchPct = isDone
+                    ? 100
+                    : watchMeta && watchMeta.durationSec > 0
+                      ? Math.min(
+                          100,
+                          Math.max(
+                            5,
+                            Math.round(
+                              (watchMeta.currentTimeSec / watchMeta.durationSec) *
+                                100
+                            )
+                          )
+                        )
+                      : 0;
+                  const ytId = extractYoutubeId(lesson.youtubeId || '');
+                  const thumbSrc =
+                    lesson.thumbnailUrl ||
+                    (ytId
+                      ? `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`
+                      : '');
+                  const pdfCount = lesson.pdfs?.length || 0;
+
+                  return (
+                    <button
+                      key={lesson.id}
+                      type="button"
+                      onClick={() => {
+                        flushPendingWatchProgress();
+                        setSelectedLessonId(lesson.id);
+                        recordWatchActivity(
+                          lesson.id,
+                          activePlaylist.id,
+                          resolvedCourseForHeader?.id || selectedCourseId
+                        );
+                      }}
+                      className="group w-full p-3.5 rounded-2xl bg-surface hover:bg-surface-2 border border-line hover:border-brand-soft/60 transition-all flex items-center gap-3.5 text-left shadow-card cursor-pointer"
+                    >
+                      <div className="relative w-28 sm:w-36 aspect-video rounded-xl overflow-hidden bg-surface-2 border border-line shrink-0">
+                        {thumbSrc ? (
+                          <img
+                            src={thumbSrc}
+                            alt={lesson.title}
+                            loading="lazy"
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          />
+                        ) : (
+                          <CoverArtwork
+                            src={activePlaylist.coverUrl}
+                            title={lesson.title}
+                            className="w-full h-full"
+                          />
+                        )}
+                        <div className="absolute inset-0 bg-black/35 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+                          <div className="w-9 h-9 rounded-full bg-brand/90 text-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform keep-white-text">
+                            <Play className="w-4 h-4 fill-current ml-0.5" />
+                          </div>
+                        </div>
+                        <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded bg-black/75 text-[10px] font-mono font-bold text-white keep-white-text">
+                          Aula {String(idx + 1).padStart(2, '0')}
+                        </span>
+                        {watchPct > 0 && (
+                          <div className="absolute inset-x-0 bottom-0 h-1 bg-black/50">
+                            <div
+                              className={`h-full ${
+                                isDone ? 'bg-emerald-400' : 'bg-brand-soft'
+                              }`}
+                              style={{ width: `${watchPct}%` }}
+                            />
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex-1 min-w-0 space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-brand-accent">
+                            Aula {idx + 1}
+                          </span>
+                          {isDone && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-[10px] font-bold text-emerald-500 shrink-0">
+                              <CheckCircle2 className="w-3 h-3" />
+                              Concluída
+                            </span>
+                          )}
+                        </div>
+
+                        <h4 className="text-xs sm:text-sm font-bold text-ink group-hover:text-brand-accent transition-colors line-clamp-2">
+                          {lesson.title}
+                        </h4>
+
+                        {lesson.description && (
+                          <p className="text-[11px] text-ink-muted line-clamp-1">
+                            {lesson.description}
+                          </p>
+                        )}
+
+                        {pdfCount > 0 && (
+                          <div className="pt-0.5 flex items-center gap-1.5 text-[11px] font-semibold text-ink-2">
+                            <FileText className="w-3.5 h-3.5 text-brand-soft" />
+                            <span>
+                              {pdfCount} PDF{pdfCount !== 1 ? 's' : ''}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      <ChevronRight className="w-4 h-4 text-ink-muted group-hover:text-brand-soft group-hover:translate-x-0.5 transition-all shrink-0" />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </main>
       ) : activeLesson ? (
-        /* CLASSROOM WINDOW */
+        /* CLASSROOM WINDOW (Step 3: Inside a Lesson -> Video Player + Materials + Playlist Lessons list below, no dropdown) */
         <SafeErrorBoundary>
           <main className="relative z-10 flex-1 w-full max-w-5xl mx-auto px-4 md:px-10 py-5 min-w-0">
-          {isLessonsDropdownOpen && (
-            <div
-              onClick={() => setIsLessonsDropdownOpen(false)}
-              className="fixed inset-0 bg-black/60 backdrop-blur-[2px] z-40 transition-opacity"
-              aria-hidden="true"
-            />
-          )}
-
           {(resolvedCourseForHeader || activePlaylist) && (
             <div className="mb-3 px-0.5 flex items-center gap-2 min-w-0 overflow-hidden">
               {resolvedCourseForHeader && (
-                <span className="text-xs sm:text-sm font-bold uppercase tracking-wider text-brand-accent truncate shrink-0 max-w-[48%]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    flushPendingWatchProgress();
+                    if (
+                      resolvedCourseForHeader.id &&
+                      resolvedCourseForHeader.id !== FREE_COURSE_ID
+                    ) {
+                      setSelectedCourseId(resolvedCourseForHeader.id);
+                      setSelectedPlaylistId(null);
+                      setSelectedLessonId(null);
+                    } else {
+                      exitClassroom();
+                    }
+                  }}
+                  className="text-xs sm:text-sm font-bold uppercase tracking-wider text-brand-accent hover:underline truncate shrink-0 max-w-[45%] cursor-pointer"
+                >
                   {resolvedCourseForHeader.title}
-                </span>
+                </button>
               )}
               {resolvedCourseForHeader && activePlaylist && (
                 <ArrowRight className="w-4 h-4 text-brand-accent shrink-0" />
               )}
               {activePlaylist && (
-                <h2 className="text-sm sm:text-base font-extrabold text-ink truncate min-w-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    flushPendingWatchProgress();
+                    setSelectedLessonId(null);
+                  }}
+                  className="text-sm sm:text-base font-extrabold text-ink hover:text-brand-accent transition-colors truncate min-w-0 cursor-pointer"
+                >
                   {activePlaylist.title}
-                </h2>
+                </button>
               )}
             </div>
           )}
 
-          {/* TOP BAR ABOVE VIDEO: [Voltar] --- [< 1/2 >] --- [Dropdown Aulas] */}
-          <div className="flex items-center justify-between gap-2 mb-3.5 relative z-50 w-full">
+          {/* TOP BAR ABOVE VIDEO: [Voltar para Playlist] --- [< 1/N >] */}
+          <div className="flex items-center justify-between gap-2 mb-3.5 relative z-30 w-full">
             <button
               type="button"
               onClick={() => {
                 flushPendingWatchProgress();
-                if (selectedCourseId && selectedCourseId !== FREE_COURSE_ID) {
+                if (selectedPlaylistId && selectedPlaylistId !== FREE_PLAYLIST_ID) {
+                  setSelectedLessonId(null);
+                } else if (
+                  selectedCourseId &&
+                  selectedCourseId !== FREE_COURSE_ID
+                ) {
                   setSelectedPlaylistId(null);
                   setSelectedLessonId(null);
-                  setIsLessonsDropdownOpen(false);
                 } else {
                   exitClassroom();
                 }
               }}
-              className="h-9 px-3 rounded-xl bg-surface hover:bg-chip-hover border border-line text-xs font-medium text-ink-2 hover:text-ink transition-colors shrink-0 inline-flex items-center gap-1.5 cursor-pointer"
+              className="h-9 px-3.5 rounded-xl bg-surface hover:bg-chip-hover border border-line text-xs font-semibold text-ink-2 hover:text-ink transition-colors shrink-0 inline-flex items-center gap-1.5 cursor-pointer"
             >
               <ArrowLeft className="w-3.5 h-3.5 text-brand-soft" />
-              <span>Voltar</span>
+              <span>
+                {selectedPlaylistId && selectedPlaylistId !== FREE_PLAYLIST_ID
+                  ? 'Voltar para Aulas da Playlist'
+                  : 'Voltar'}
+              </span>
             </button>
 
             <div className="h-9 inline-flex items-center gap-0.5 p-1 rounded-xl bg-surface border border-line shrink-0">
@@ -5725,7 +6172,6 @@ export default function App() {
                   if (prevLesson) {
                     flushPendingWatchProgress();
                     setSelectedLessonId(prevLesson.id);
-                    setIsLessonsDropdownOpen(false);
                   }
                 }}
                 className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-ink-2 hover:text-ink hover:bg-chip-hover disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
@@ -5735,9 +6181,9 @@ export default function App() {
                 <ChevronLeft className="w-4 h-4 text-brand-soft" />
               </button>
 
-              <span className="px-2 text-[11px] font-mono font-medium text-ink-2 tabular-nums select-none">
+              <span className="px-2.5 text-[11px] font-mono font-semibold text-ink-2 tabular-nums select-none">
                 {currentLessonIndex >= 0
-                  ? `${currentLessonIndex + 1} / ${orderedClassroomLessons.length}`
+                  ? `Aula ${currentLessonIndex + 1} de ${orderedClassroomLessons.length}`
                   : '1 / 1'}
               </span>
 
@@ -5748,7 +6194,6 @@ export default function App() {
                   if (nextLesson) {
                     flushPendingWatchProgress();
                     setSelectedLessonId(nextLesson.id);
-                    setIsLessonsDropdownOpen(false);
                   }
                 }}
                 className="w-7 h-7 rounded-lg inline-flex items-center justify-center text-ink-2 hover:text-ink hover:bg-chip-hover disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
@@ -5757,70 +6202,6 @@ export default function App() {
               >
                 <ChevronRight className="w-4 h-4 text-brand-soft" />
               </button>
-            </div>
-
-            <div ref={lessonsDropdownRef} className="relative shrink-0">
-              <button
-                type="button"
-                onClick={() => setIsLessonsDropdownOpen((prev) => !prev)}
-                className={`h-9 px-3 rounded-xl border text-xs font-medium inline-flex items-center gap-1.5 transition-all cursor-pointer ${
-                  isLessonsDropdownOpen
-                    ? 'bg-brand border-brand-accent text-white shadow-glow-md'
-                    : 'bg-surface hover:bg-chip-hover border-line text-ink-2 hover:text-ink'
-                }`}
-              >
-                <ListVideo
-                  className={`w-3.5 h-3.5 ${
-                    isLessonsDropdownOpen ? 'text-white' : 'text-brand-soft'
-                  }`}
-                />
-                <span>Aulas</span>
-                <ChevronDown
-                  className={`w-3.5 h-3.5 transition-transform duration-200 ${
-                    isLessonsDropdownOpen ? 'rotate-180 text-white' : 'text-ink-muted'
-                  }`}
-                />
-              </button>
-
-              {isLessonsDropdownOpen && (
-                <div className="absolute right-0 top-full mt-2.5 w-[calc(100vw-2rem)] sm:w-84 max-w-[350px] max-h-[68dvh] overflow-y-auto rounded-2xl bg-surface border border-brand-soft/50 shadow-pop overflow-hidden z-50">
-                  <div className="px-4 py-3 bg-surface-2 border-b border-line flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      {resolvedCourseForHeader && (
-                        <span className="block text-[10px] font-bold uppercase tracking-wider text-brand-accent truncate">
-                          {resolvedCourseForHeader.title}
-                        </span>
-                      )}
-                      <h2 className="text-xs font-bold text-ink truncate">
-                        {activePlaylist
-                          ? activePlaylist.title
-                          : resolvedCourseForHeader
-                            ? resolvedCourseForHeader.title
-                            : 'Selecionar Aula'}
-                      </h2>
-                    </div>
-                    <span className="px-2 py-0.5 rounded-md bg-chip text-[10px] font-mono font-semibold text-brand-accent shrink-0">
-                      {orderedClassroomLessons.length} aula
-                      {orderedClassroomLessons.length !== 1 ? 's' : ''}
-                    </span>
-                  </div>
-
-                  <div className="p-3.5 space-y-1.5">
-                    {orderedClassroomLessons.map((lesson, idx) => (
-                      <ClassroomLessonRow
-                        key={lesson.id}
-                        lesson={lesson}
-                        idx={idx}
-                        isCurrent={lesson.id === activeLesson.id}
-                        isDone={Boolean(
-                          userProgress?.completedLessonIds.includes(lesson.id)
-                        )}
-                        onSelect={handleSelectLessonFromDropdown}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
           </div>
 
@@ -5943,6 +6324,48 @@ export default function App() {
                 </div>
               </div>
             )}
+
+            {/* PLAYLIST LESSONS LIST DIRECTLY BELOW LESSON MATERIALS (NO DROPDOWN) */}
+            {orderedClassroomLessons.length > 1 && (
+              <div className="space-y-3 pt-4 border-t border-line">
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className="text-sm font-bold text-ink flex items-center gap-2">
+                    <ListVideo className="w-4 h-4 text-brand-soft" />
+                    <span>
+                      Aulas desta Playlist ({orderedClassroomLessons.length})
+                    </span>
+                  </h2>
+                  {selectedPlaylistId &&
+                    selectedPlaylistId !== FREE_PLAYLIST_ID && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          flushPendingWatchProgress();
+                          setSelectedLessonId(null);
+                        }}
+                        className="text-xs font-bold text-brand-accent hover:underline cursor-pointer"
+                      >
+                        Ver página da playlist
+                      </button>
+                    )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {orderedClassroomLessons.map((lesson, idx) => (
+                    <ClassroomLessonRow
+                      key={lesson.id}
+                      lesson={lesson}
+                      idx={idx}
+                      isCurrent={lesson.id === activeLesson.id}
+                      isDone={Boolean(
+                        userProgress?.completedLessonIds.includes(lesson.id)
+                      )}
+                      onSelect={handleSelectLessonFromDropdown}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </main>
         </SafeErrorBoundary>
@@ -5989,7 +6412,7 @@ export default function App() {
               onSaveStudent={handleSaveStudent}
               onDeleteStudent={requestDeleteStudent}
               onSaveConfig={handleSaveConfig}
-              onOpenCalendar={() => setIsCalendarModalOpen(true)}
+              onOpenCalendar={() => openCalendarOnDate(null)}
               currentUserUid={user.uid}
             />
           </React.Suspense>
@@ -5998,9 +6421,9 @@ export default function App() {
         /* SHOWCASE HOME & FILTERED WINDOWS */
         <main className="relative z-10 flex-1 w-full max-w-[1440px] mx-auto px-4 sm:px-8 md:px-14 lg:px-20">
           {activeNav === 'home' && (
-            <section className="pt-8 pb-8 md:pt-14 md:pb-12 flex flex-col sm:flex-row sm:items-start justify-between gap-5">
-              <div className="max-w-2xl space-y-4">
-                <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold tracking-tight text-ink text-balance leading-[1.14]">
+            <section className="pt-6 pb-6 md:pt-12 md:pb-8 flex flex-col sm:flex-row sm:items-start justify-between gap-5">
+              <div className="max-w-2xl space-y-3">
+                <h1 className="text-2xl sm:text-4xl md:text-5xl font-extrabold tracking-tight text-ink text-balance leading-[1.14]">
                   {displayHeroTitle}
                 </h1>
                 <p className="text-xs sm:text-sm md:text-base text-ink-2 max-w-lg font-medium leading-relaxed">
@@ -6020,38 +6443,37 @@ export default function App() {
                 )}
               </div>
 
-              {isAdmin && (
-                <div className="shrink-0 self-start">
-                  <button
-                    type="button"
-                    onClick={() => setIsCalendarModalOpen(true)}
-                    title="Abrir Calendário do Curso (Assuntos da Semana, Eventos e Feriados)"
-                    aria-label="Abrir Calendário Acadêmico"
-                    className="group relative inline-flex items-center gap-3 p-1.5 pr-4 rounded-full bg-surface hover:bg-surface-2 border border-brand-soft/45 hover:border-brand-accent shadow-glow-sm hover:shadow-glow-md transition-all duration-300 active:scale-95 cursor-pointer"
-                  >
-                    <span className="relative w-11 h-11 rounded-full bg-gradient-to-tr from-[#2563eb] via-[#2563eb] to-[#93c5fd] text-white flex items-center justify-center shadow-glow-sm group-hover:scale-105 group-hover:rotate-6 transition-all duration-300 keep-white-text">
-                      <CalendarIcon className="w-5 h-5" />
-                      <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-emerald-400 border-2 border-surface flex items-center justify-center">
-                        <Sparkles className="w-2 h-2 text-black" />
-                      </span>
+              <div className="shrink-0 self-start">
+                <button
+                  type="button"
+                  onClick={() => openCalendarOnDate(null)}
+                  title="Abrir Calendário do Curso (Assuntos da Semana, Eventos e Feriados)"
+                  aria-label="Abrir Calendário Acadêmico"
+                  className="group relative inline-flex items-center gap-3 p-1.5 pr-4 rounded-full bg-surface hover:bg-surface-2 border border-brand-soft/45 hover:border-brand-accent shadow-glow-sm hover:shadow-glow-md transition-all duration-300 active:scale-95 cursor-pointer"
+                >
+                  <span className="relative w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-gradient-to-tr from-[#2563eb] via-[#2563eb] to-[#93c5fd] text-white flex items-center justify-center shadow-glow-sm group-hover:scale-105 group-hover:rotate-6 transition-all duration-300 keep-white-text">
+                    <CalendarIcon className="w-5 h-5" />
+                    <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-emerald-400 border-2 border-surface flex items-center justify-center">
+                      <Sparkles className="w-2 h-2 text-black" />
                     </span>
-                    <div className="text-left">
-                      <span className="block text-xs font-extrabold text-ink group-hover:text-brand-accent transition-colors">
-                        Calendário
-                      </span>
-                      <span className="block text-[10px] font-semibold text-brand-accent">
-                        Semana & Eventos
-                      </span>
-                    </div>
-                  </button>
-                </div>
-              )}
+                  </span>
+                  <div className="text-left">
+                    <span className="block text-xs font-extrabold text-ink group-hover:text-brand-accent transition-colors">
+                      Calendário
+                    </span>
+                    <span className="block text-[10px] font-semibold text-brand-accent">
+                      Semana & Eventos
+                    </span>
+                  </div>
+                </button>
+              </div>
             </section>
           )}
 
-          <div className="py-2 space-y-10">
+          <div className="py-2 space-y-9">
             {activeNav === 'home' && (
               <>
+                {/* 1. TRANSMISSÃO AO VIVO (Aparece antes de Continuar Assistindo quando houver live ativa) */}
                 {isPlatformLiveActive && (
                   <section className="space-y-2.5">
                     <div className="flex items-center justify-between gap-2">
@@ -6068,7 +6490,7 @@ export default function App() {
                         setDetectedLiveVideoId('');
                         setIsLiveClassroomOpen(true);
                       }}
-                      className="w-full sm:max-w-2xl p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-rose-600/20 via-surface to-surface hover:from-rose-600/30 border border-rose-500/50 hover:border-rose-500 transition-all flex items-center justify-between gap-4 text-left group shadow-card cursor-pointer"
+                      className="w-full p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-rose-600/20 via-surface to-surface hover:from-rose-600/30 border border-rose-500/50 hover:border-rose-500 transition-all flex items-center justify-between gap-4 text-left group shadow-card cursor-pointer"
                     >
                       <div className="flex items-center gap-3.5 sm:gap-4 min-w-0">
                         <div className="w-12 h-12 rounded-2xl bg-rose-600 text-white flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform shrink-0 keep-white-text">
@@ -6076,12 +6498,12 @@ export default function App() {
                         </div>
 
                         <div className="min-w-0 space-y-1">
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
                             <span className="px-2 py-0.5 rounded-md bg-rose-600 text-white text-[10px] font-extrabold uppercase tracking-wider keep-white-text">
                               AO VIVO
                             </span>
                             <span className="text-[11px] font-semibold text-ink-2 truncate">
-                              Clique para entrar na sala de transmissão
+                              Entre na transmissão ao vivo com 1 clique
                             </span>
                           </div>
                           <p className="text-sm sm:text-base font-extrabold text-ink truncate">
@@ -6091,20 +6513,21 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div className="px-4 py-2 rounded-xl bg-rose-600 group-hover:bg-rose-500 text-white text-xs font-bold shrink-0 inline-flex items-center gap-1.5 transition-colors keep-white-text">
-                        <span>Assistir</span>
+                      <div className="px-4 py-2.5 rounded-xl bg-rose-600 group-hover:bg-rose-500 text-white text-xs font-bold shrink-0 inline-flex items-center gap-1.5 transition-colors keep-white-text">
+                        <span>Entrar na Live</span>
                         <ChevronRight className="w-4 h-4" />
                       </div>
                     </button>
                   </section>
                 )}
 
+                {/* 2. CONTINUAR ASSISTINDO (Em todas as responsividades) */}
                 {continueWatchingData && (
                   <section className="space-y-2.5">
                     <div className="flex items-center justify-between gap-2">
                       <h2 className="text-xs sm:text-sm font-bold uppercase tracking-wider text-brand-accent flex items-center gap-2">
                         <Play className="w-3.5 h-3.5 text-brand-soft fill-current" />
-                        <span>Continuar de onde parou</span>
+                        <span>Continuar assistindo</span>
                       </h2>
                     </div>
 
@@ -6125,24 +6548,49 @@ export default function App() {
                         setSelectedLessonId(continueWatchingData.lesson.id);
                         setIsLessonsDropdownOpen(false);
                       }}
-                      className="w-full sm:max-w-xl p-3.5 sm:p-4 rounded-2xl bg-surface hover:bg-surface-2 border border-brand-soft/35 hover:border-brand-soft/80 transition-all flex items-center gap-3.5 sm:gap-4 text-left group shadow-card cursor-pointer"
+                      className="w-full sm:max-w-2xl p-3.5 sm:p-4 rounded-2xl bg-surface hover:bg-surface-2 border border-brand-soft/35 hover:border-brand-soft/80 transition-all flex items-center gap-3.5 sm:gap-4 text-left group shadow-card cursor-pointer"
                     >
-                      <div className="w-11 h-11 rounded-full bg-brand text-white flex items-center justify-center shadow-glow-sm group-hover:scale-105 transition-transform shrink-0 keep-white-text">
-                        <Play className="w-4 h-4 fill-current ml-0.5" />
+                      <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-brand text-white flex items-center justify-center shadow-glow-sm group-hover:scale-105 transition-transform shrink-0 keep-white-text">
+                        <Play className="w-4 h-4 sm:w-5 sm:h-5 fill-current ml-0.5" />
                       </div>
 
                       <div className="min-w-0 flex-1 space-y-1.5">
-                        <p className="text-xs sm:text-sm font-bold text-ink truncate">
+                        {(continueWatchingData.parentCourse ||
+                          continueWatchingData.parentPlaylist) && (
+                          <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-brand-accent truncate">
+                            {continueWatchingData.parentCourse && (
+                              <span className="truncate">
+                                {continueWatchingData.parentCourse.title}
+                              </span>
+                            )}
+                            {continueWatchingData.parentCourse &&
+                              continueWatchingData.parentPlaylist && (
+                                <span>•</span>
+                              )}
+                            {continueWatchingData.parentPlaylist && (
+                              <span className="truncate text-ink-2">
+                                {continueWatchingData.parentPlaylist.title}
+                              </span>
+                            )}
+                          </div>
+                        )}
+
+                        <p className="text-xs sm:text-sm md:text-base font-extrabold text-ink truncate">
                           {continueWatchingData.lesson.title}
                         </p>
 
-                        <div className="w-full h-1.5 rounded-full bg-chip overflow-hidden">
-                          <div
-                            className="h-full bg-brand-soft rounded-full transition-all"
-                            style={{
-                              width: `${Math.max(8, continueWatchingData.progressPercent)}%`,
-                            }}
-                          />
+                        <div className="flex items-center gap-3">
+                          <div className="flex-1 h-1.5 rounded-full bg-chip overflow-hidden">
+                            <div
+                              className="h-full bg-brand-soft rounded-full transition-all"
+                              style={{
+                                width: `${Math.max(8, continueWatchingData.progressPercent)}%`,
+                              }}
+                            />
+                          </div>
+                          <span className="text-[10px] font-mono font-bold text-ink-muted shrink-0">
+                            {continueWatchingData.progressPercent}%
+                          </span>
                         </div>
                       </div>
 
@@ -6153,105 +6601,47 @@ export default function App() {
                   </section>
                 )}
 
+                {/* 3. CURSOS DISPONÍVEIS LIBERADOS PARA A TURMA (Em todas as responsividades) */}
                 {homeCourses.length > 0 && (
                   <DraggableHorizontalRow
-                    title="Cursos"
-                    subtitle="Cursos liberados para o seu acesso"
-                  >
-                    {homeCourses.map((course) => (
-                      <button
-                        key={course.id}
-                        type="button"
-                        draggable={false}
-                        onClick={() => openCourse(course)}
-                        className="cover-poster-dark group relative w-[150px] sm:w-[172px] md:w-[192px] shrink-0 aspect-[2/3] rounded-2xl overflow-hidden border border-white/10 hover:border-[#3b82f6]/80 hover:-translate-y-1 text-left transition-all duration-300 shadow-card cursor-pointer"
-                      >
-                        <CoverArtwork
-                          src={course.coverUrl}
-                          title={course.title}
-                          className="w-full h-full pointer-events-none"
-                          showBottomPurpleBar
-                          locked={false}
-                        />
-
-                        <div className="absolute inset-x-0 bottom-0 p-3.5 sm:p-4 z-10 pointer-events-none">
-                          <h3 className="text-xs sm:text-sm font-extrabold uppercase tracking-wide line-clamp-2 drop-shadow text-white">
-                            {course.title}
-                          </h3>
-                        </div>
-                      </button>
-                    ))}
-                  </DraggableHorizontalRow>
-                )}
-
-                {homeStudentPlaylists.length > 0 && (
-                  <DraggableHorizontalRow
-                    title="Playlists dos seus cursos"
-                    subtitle="Arraste para o lado e clique na playlist que deseja assistir"
-                    headerRight={
-                      homeCourses.length > 1 ? (
-                        <div className="flex items-center gap-1 p-1 rounded-xl bg-surface border border-line overflow-x-auto max-w-full">
-                          <button
-                            type="button"
-                            onClick={() => setHomePlaylistCourseFilter('ALL')}
-                            className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                              homePlaylistCourseFilter === 'ALL'
-                                ? 'bg-brand text-white keep-white-text'
-                                : 'text-ink-2 hover:text-ink'
-                            }`}
-                          >
-                            Todos
-                          </button>
-                          {homeCourses.map((c) => (
-                            <button
-                              key={c.id}
-                              type="button"
-                              onClick={() => setHomePlaylistCourseFilter(c.id)}
-                              className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                                homePlaylistCourseFilter === c.id
-                                  ? 'bg-brand text-white keep-white-text'
-                                  : 'text-ink-2 hover:text-ink'
-                              }`}
-                            >
-                              {c.title}
-                            </button>
-                          ))}
-                        </div>
-                      ) : undefined
+                    title="Cursos disponíveis"
+                    subtitle={
+                      myStudentTurma
+                        ? `Liberados para ${myStudentTurma.name}`
+                        : 'Cursos liberados para a sua turma'
                     }
                   >
-                    {homeStudentPlaylists.map(({ playlist: pl, course }) => {
-                      const plLessonCount = (pl.lessonIds || []).filter((id) =>
-                        lessons.some((l) => l.id === id)
+                    {homeCourses.map((course) => {
+                      const plCount = (course.playlistIds || []).filter((id) =>
+                        playlists.some((p) => p.id === id)
                       ).length;
-
                       return (
                         <button
-                          key={`${course.id}_${pl.id}`}
+                          key={course.id}
                           type="button"
                           draggable={false}
-                          onClick={() => openPlaylistFromCourse(pl, course.id)}
+                          onClick={() => openCourse(course)}
                           className="cover-poster-dark group relative w-[150px] sm:w-[172px] md:w-[192px] shrink-0 aspect-[2/3] rounded-2xl overflow-hidden border border-white/10 hover:border-[#3b82f6]/80 hover:-translate-y-1 text-left transition-all duration-300 shadow-card cursor-pointer"
                         >
                           <CoverArtwork
-                            src={pl.coverUrl}
-                            title={pl.title}
+                            src={course.coverUrl}
+                            title={course.title}
                             className="w-full h-full pointer-events-none"
                             showBottomPurpleBar
+                            locked={false}
                           />
 
-                          <div className="absolute top-2.5 inset-x-2.5 z-10 flex items-center justify-between gap-1.5 pointer-events-none">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-white/90 drop-shadow truncate">
-                              {course.title}
-                            </span>
-                            <span className="text-[10px] font-mono tabular-nums font-bold text-white/90 drop-shadow shrink-0">
-                              {plLessonCount} aula{plLessonCount !== 1 ? 's' : ''}
-                            </span>
-                          </div>
+                          {plCount > 0 && (
+                            <div className="absolute top-2.5 right-2.5 z-10 pointer-events-none">
+                              <span className="px-2 py-0.5 rounded-md bg-black/65 border border-white/15 text-[10px] font-mono font-bold text-white keep-white-text">
+                                {plCount} playlist{plCount !== 1 ? 's' : ''}
+                              </span>
+                            </div>
+                          )}
 
                           <div className="absolute inset-x-0 bottom-0 p-3.5 sm:p-4 z-10 pointer-events-none">
-                            <h3 className="text-xs sm:text-sm font-extrabold uppercase tracking-wide text-white line-clamp-2 drop-shadow">
-                              {pl.title}
+                            <h3 className="text-xs sm:text-sm font-extrabold uppercase tracking-wide line-clamp-2 drop-shadow text-white">
+                              {course.title}
                             </h3>
                           </div>
                         </button>
@@ -6259,6 +6649,167 @@ export default function App() {
                     })}
                   </DraggableHorizontalRow>
                 )}
+
+                {/* 4. PROGRESSO DO ALUNO E PRÓXIMOS EVENTOS DO CALENDÁRIO (Em todas as responsividades) */}
+                <section className="grid grid-cols-1 lg:grid-cols-12 gap-5 pt-1">
+                  {/* Card de Progresso */}
+                  <div className="lg:col-span-6 p-5 sm:p-6 rounded-2xl bg-surface border border-line shadow-card flex flex-col justify-between space-y-5">
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <h2 className="text-sm sm:text-base font-extrabold uppercase tracking-wider text-ink flex items-center gap-2">
+                            <CheckCircle2 className="w-4 h-4 text-brand-soft" />
+                            <span>Seu Progresso</span>
+                          </h2>
+                          <p className="text-xs text-ink-muted mt-0.5">
+                            Acompanhamento das aulas nos cursos liberados
+                          </p>
+                        </div>
+
+                        <div className="px-3 py-1.5 rounded-xl bg-brand/15 border border-brand/30 text-brand-accent font-mono text-sm font-extrabold">
+                          {studentProgressSummary.overallPercent}%
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between text-xs font-semibold text-ink-2">
+                          <span>Aulas concluídas</span>
+                          <span className="font-mono font-bold text-ink">
+                            {studentProgressSummary.completedLessons} /{' '}
+                            {studentProgressSummary.totalLessons}
+                          </span>
+                        </div>
+                        <div className="w-full h-2.5 rounded-full bg-chip overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-brand to-brand-soft rounded-full transition-all duration-500"
+                            style={{
+                              width: `${studentProgressSummary.overallPercent}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+
+                      {studentProgressSummary.courseBreakdown.length > 0 && (
+                        <div className="space-y-2.5 pt-2 border-t border-line">
+                          <span className="block text-[11px] font-bold uppercase tracking-wider text-ink-muted">
+                            Progresso por curso
+                          </span>
+                          <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                            {studentProgressSummary.courseBreakdown.map(
+                              ({ course, completed, total, percent }) => (
+                                <button
+                                  key={course.id}
+                                  type="button"
+                                  onClick={() => openCourse(course)}
+                                  className="w-full p-2.5 rounded-xl bg-surface-2 hover:bg-chip-hover border border-line transition-colors text-left space-y-1.5 cursor-pointer group"
+                                >
+                                  <div className="flex items-center justify-between gap-2 text-xs">
+                                    <span className="font-bold text-ink group-hover:text-brand-accent transition-colors truncate">
+                                      {course.title}
+                                    </span>
+                                    <span className="font-mono text-[11px] font-semibold text-ink-2 shrink-0">
+                                      {completed}/{total} ({percent}%)
+                                    </span>
+                                  </div>
+                                  <div className="w-full h-1.5 rounded-full bg-chip overflow-hidden">
+                                    <div
+                                      className="h-full bg-brand-soft rounded-full transition-all"
+                                      style={{ width: `${percent}%` }}
+                                    />
+                                  </div>
+                                </button>
+                              )
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Card de Próximos Eventos (Clicável para abrir o Calendário na data) */}
+                  <div className="lg:col-span-6 p-5 sm:p-6 rounded-2xl bg-surface border border-line shadow-card flex flex-col justify-between space-y-4">
+                    <div className="space-y-3.5">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <h2 className="text-sm sm:text-base font-extrabold uppercase tracking-wider text-ink flex items-center gap-2">
+                            <CalendarIcon className="w-4 h-4 text-brand-soft" />
+                            <span>Próximos Eventos</span>
+                          </h2>
+                          <p className="text-xs text-ink-muted mt-0.5">
+                            Clique em um evento para abrir direto no calendário
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => openCalendarOnDate(null)}
+                          className="px-3.5 py-2 rounded-xl bg-brand/15 hover:bg-brand text-brand-accent hover:text-white border border-brand/30 text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+                        >
+                          <CalendarIcon className="w-3.5 h-3.5" />
+                          <span>Ver Calendário</span>
+                        </button>
+                      </div>
+
+                      {upcomingCalendarEvents.length === 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => openCalendarOnDate(null)}
+                          className="w-full p-6 rounded-xl bg-surface-2 hover:bg-chip-hover border border-line text-center space-y-1.5 transition-colors cursor-pointer"
+                        >
+                          <p className="text-xs font-bold text-ink">
+                            Nenhum evento próximo cadastrado
+                          </p>
+                          <p className="text-[11px] text-brand-accent font-semibold">
+                            Toque aqui para abrir o Calendário Acadêmico completo
+                          </p>
+                        </button>
+                      ) : (
+                        <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                          {upcomingCalendarEvents.map((ev) => {
+                            const palette =
+                              COLOR_PALETTE[ev.color] || COLOR_PALETTE.violet;
+                            return (
+                              <button
+                                key={ev.id}
+                                type="button"
+                                onClick={() => openCalendarOnDate(ev.startDate)}
+                                className={`w-full p-3 rounded-xl border ${palette.highlighterBg} ${palette.accentBorder} hover:brightness-110 transition-all flex items-center justify-between gap-3 text-left cursor-pointer group`}
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <span
+                                    className={`w-2.5 h-2.5 rounded-full ${palette.dotBg} shrink-0`}
+                                  />
+                                  <div className="min-w-0">
+                                    <p className="text-xs sm:text-sm font-bold text-ink truncate">
+                                      {ev.title}
+                                    </p>
+                                    {ev.description && (
+                                      <p className="text-[11px] text-ink-2 truncate">
+                                        {ev.description}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <span
+                                    className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-bold ${palette.badgeBg} ${palette.badgeText}`}
+                                  >
+                                    {formatShortDateRange(
+                                      ev.startDate,
+                                      ev.endDate
+                                    )}
+                                  </span>
+                                  <ChevronRight className="w-4 h-4 text-ink-muted group-hover:translate-x-0.5 transition-transform" />
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </section>
               </>
             )}
 
@@ -6765,6 +7316,7 @@ export default function App() {
             onSaveEvent={handleSaveCalendarEvent}
             onDeleteEvent={requestDeleteCalendarEvent}
             onVisibleYearChange={setCalendarVisibleYear}
+            initialSelectedDate={calendarInitialDate}
           />
         </React.Suspense>
       )}

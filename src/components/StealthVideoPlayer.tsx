@@ -12,6 +12,7 @@ import {
   SkipForward,
   RectangleHorizontal,
   Captions,
+  X,
 } from 'lucide-react';
 import { extractYoutubeId, extractYoutubeChannelId } from '../types';
 import { PlayerWatermark } from './PlayerWatermark';
@@ -148,6 +149,9 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
 
   const hideControlsTimer = useRef<number | null>(null);
   const captionToastTimerRef = useRef<number | null>(null);
+  const captionSyncTimersRef = useRef<number[]>([]);
+  const captionTracksCacheRef = useRef<any[]>([]);
+  const mountedCcPolicyRef = useRef<number | null>(null);
   const seekFeedbackTimerRef = useRef<number | null>(null);
   const edgeClickRef = useRef<{
     side: 'left' | 'right' | null;
@@ -164,7 +168,11 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
   const isPlayingRef = useRef(false);
   const isLiveModeRef = useRef(initialIsLive);
   const isSpeedMenuOpenRef = useRef(false);
+  const controlsVisibleRef = useRef(false);
   const captionsEnabledRef = useRef(false);
+  const playbackRateRef = useRef(playbackRate);
+  const volumeRef = useRef(volume);
+  const isMutedRef = useRef(isMuted);
   const currentTimeRef = useRef(currentTime);
   const initialTimeRef = useRef(initialTimeSec);
   const onTimeUpdateRef = useRef(onTimeUpdate);
@@ -173,6 +181,7 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
   const durationRef = useRef(0);
   const hasStartedOnceRef = useRef(false);
   const suppressInitialControlsRef = useRef(true);
+  const suppressControlsUntilRef = useRef<number>(0);
   const isMountingPlayerRef = useRef(false);
   const isComponentMountedRef = useRef(true);
 
@@ -209,8 +218,24 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
   }, [isSpeedMenuOpen]);
 
   useEffect(() => {
+    controlsVisibleRef.current = controlsVisible;
+  }, [controlsVisible]);
+
+  useEffect(() => {
     captionsEnabledRef.current = captionsEnabled;
   }, [captionsEnabled]);
+
+  useEffect(() => {
+    playbackRateRef.current = playbackRate;
+  }, [playbackRate]);
+
+  useEffect(() => {
+    volumeRef.current = volume;
+  }, [volume]);
+
+  useEffect(() => {
+    isMutedRef.current = isMuted;
+  }, [isMuted]);
 
   const clearHideTimer = useCallback(() => {
     if (hideControlsTimer.current !== null) {
@@ -219,53 +244,86 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
     }
   }, []);
 
-  const syncPlayerCaptions = useCallback((targetPlayer: any, enabled: boolean) => {
-    if (!targetPlayer) return;
-    try {
-      if (enabled) {
-        targetPlayer.loadModule?.('captions');
-        targetPlayer.loadModule?.('cc');
-        const applyCaptionTrack = () => {
-          try {
-            const tracks =
-              targetPlayer.getOption?.('captions', 'tracklist') ||
-              targetPlayer.getOption?.('cc', 'tracklist') ||
-              [];
-            if (Array.isArray(tracks) && tracks.length > 0) {
-              const preferred =
-                tracks.find(
-                  (t: any) =>
-                    t?.languageCode === 'pt' ||
-                    t?.languageCode === 'pt-BR' ||
-                    t?.languageCode === 'pt-PT' ||
-                    String(t?.languageName || '')
-                      .toLowerCase()
-                      .includes('portugu')
-                ) || tracks[0];
-              targetPlayer.setOption?.('captions', 'track', preferred);
-              targetPlayer.setOption?.('cc', 'track', preferred);
-            } else {
-              targetPlayer.setOption?.('captions', 'track', {
-                languageCode: 'pt',
-              });
-              targetPlayer.setOption?.('cc', 'track', { languageCode: 'pt' });
-            }
-          } catch {
-            // ignore track selection errors
-          }
-        };
-        applyCaptionTrack();
-        window.setTimeout(applyCaptionTrack, 220);
-      } else {
-        targetPlayer.setOption?.('captions', 'track', {});
-        targetPlayer.setOption?.('cc', 'track', {});
-        targetPlayer.unloadModule?.('captions');
-        targetPlayer.unloadModule?.('cc');
-      }
-    } catch {
-      // ignore caption module errors
+  const clearCaptionSyncTimers = useCallback(() => {
+    if (captionSyncTimersRef.current.length > 0) {
+      captionSyncTimersRef.current.forEach((id) => window.clearTimeout(id));
+      captionSyncTimersRef.current = [];
     }
   }, []);
+
+  const syncPlayerCaptions = useCallback(
+    (targetPlayer: any, enabled: boolean) => {
+      if (!targetPlayer) return;
+      clearCaptionSyncTimers();
+      try {
+        if (enabled) {
+          targetPlayer.loadModule?.('captions');
+          targetPlayer.loadModule?.('cc');
+          const applyCaptionTrack = () => {
+            if (!captionsEnabledRef.current) return;
+            try {
+              targetPlayer.loadModule?.('captions');
+              targetPlayer.loadModule?.('cc');
+              const liveTracks =
+                targetPlayer.getOption?.('captions', 'tracklist') ||
+                targetPlayer.getOption?.('cc', 'tracklist');
+              if (Array.isArray(liveTracks) && liveTracks.length > 0) {
+                captionTracksCacheRef.current = liveTracks;
+              }
+              const tracks =
+                (Array.isArray(liveTracks) && liveTracks.length > 0
+                  ? liveTracks
+                  : captionTracksCacheRef.current) || [];
+
+              if (Array.isArray(tracks) && tracks.length > 0) {
+                const preferred =
+                  tracks.find(
+                    (t: any) =>
+                      t?.languageCode === 'pt' ||
+                      t?.languageCode === 'pt-BR' ||
+                      t?.languageCode === 'pt-PT' ||
+                      String(t?.vss_id || '').includes('.pt') ||
+                      String(t?.languageName || '')
+                        .toLowerCase()
+                        .includes('portugu')
+                  ) || tracks[0];
+                targetPlayer.setOption?.('captions', 'track', preferred);
+                targetPlayer.setOption?.('cc', 'track', preferred);
+              } else {
+                targetPlayer.setOption?.('captions', 'track', {
+                  languageCode: 'pt',
+                });
+                targetPlayer.setOption?.('cc', 'track', {
+                  languageCode: 'pt',
+                });
+              }
+            } catch {
+              // ignore track selection errors
+            }
+          };
+          applyCaptionTrack();
+          [180, 450, 950, 1600].forEach((delay) => {
+            const tId = window.setTimeout(applyCaptionTrack, delay);
+            captionSyncTimersRef.current.push(tId);
+          });
+        } else {
+          const liveTracks =
+            targetPlayer.getOption?.('captions', 'tracklist') ||
+            targetPlayer.getOption?.('cc', 'tracklist');
+          if (Array.isArray(liveTracks) && liveTracks.length > 0) {
+            captionTracksCacheRef.current = liveTracks;
+          }
+          targetPlayer.setOption?.('captions', 'track', {});
+          targetPlayer.setOption?.('cc', 'track', {});
+          targetPlayer.unloadModule?.('captions');
+          targetPlayer.unloadModule?.('cc');
+        }
+      } catch {
+        // ignore caption module errors
+      }
+    },
+    [clearCaptionSyncTimers]
+  );
 
   /**
    * Shows top & bottom shading + controls and schedules BOTH to disappear together
@@ -312,6 +370,8 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
     hasStartedOnceRef.current = false;
     suppressInitialControlsRef.current = true;
     isMountingPlayerRef.current = false;
+    mountedCcPolicyRef.current = null;
+    captionTracksCacheRef.current = [];
     setIsEnded(false);
     setIsLiveMode(nextIsLive);
     isLiveModeRef.current = nextIsLive;
@@ -324,6 +384,7 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
     setSeekFeedback(null);
     lastReportedSecRef.current = -1;
     clearHideTimer();
+    clearCaptionSyncTimers();
 
     if (mountNodeRef.current) {
       mountNodeRef.current.innerHTML = '';
@@ -335,6 +396,7 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
     return () => {
       isComponentMountedRef.current = false;
       clearHideTimer();
+      clearCaptionSyncTimers();
       if (captionToastTimerRef.current !== null) {
         window.clearTimeout(captionToastTimerRef.current);
       }
@@ -354,7 +416,14 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
       playerRef.current = null;
       isMountingPlayerRef.current = false;
     };
-  }, [cleanVideoId, cleanChannelId, isLiveStream, youtubeIdOrUrl, clearHideTimer]);
+  }, [
+    cleanVideoId,
+    cleanChannelId,
+    isLiveStream,
+    youtubeIdOrUrl,
+    clearHideTimer,
+    clearCaptionSyncTimers,
+  ]);
 
   const inspectLiveMetadata = useCallback((targetPlayer: any) => {
     if (!targetPlayer || typeof targetPlayer.getVideoData !== 'function') return;
@@ -380,153 +449,194 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
     }
   }, []);
 
-  const mountAndStartPlayer = useCallback(() => {
-    if (isMountingPlayerRef.current || playerRef.current) return;
-    isMountingPlayerRef.current = true;
+  const mountAndStartPlayer = useCallback(
+    (resumeSecOverride?: number, shouldAutoPlay = true) => {
+      if (isMountingPlayerRef.current || playerRef.current) return;
+      isMountingPlayerRef.current = true;
 
-    const resumeSec =
-      !isLiveModeRef.current && initialTimeRef.current > 2
-        ? Math.floor(initialTimeRef.current)
-        : 0;
+      const resumeSec =
+        resumeSecOverride !== undefined
+          ? Math.max(0, Math.floor(resumeSecOverride))
+          : !isLiveModeRef.current && initialTimeRef.current > 2
+          ? Math.floor(initialTimeRef.current)
+          : 0;
 
-    loadYouTubeApi().then(() => {
-      if (!isComponentMountedRef.current || !mountNodeRef.current) return;
+      loadYouTubeApi().then(() => {
+        if (!isComponentMountedRef.current || !mountNodeRef.current) return;
 
-      mountNodeRef.current.innerHTML = '';
-      const playerDiv = document.createElement('div');
-      mountNodeRef.current.appendChild(playerDiv);
+        mountNodeRef.current.innerHTML = '';
+        const playerDiv = document.createElement('div');
+        mountNodeRef.current.appendChild(playerDiv);
 
-      const useChannelLiveStream = Boolean(
-        cleanChannelId && cleanVideoId === cleanChannelId
-      );
+        const useChannelLiveStream = Boolean(
+          cleanChannelId && cleanVideoId === cleanChannelId
+        );
+        const ccPolicy = captionsEnabledRef.current ? 1 : 0;
+        mountedCcPolicyRef.current = ccPolicy;
 
-      try {
-        playerRef.current = new window.YT.Player(playerDiv, {
-          videoId: useChannelLiveStream ? 'live_stream' : cleanVideoId,
-          width: '100%',
-          height: '100%',
-          playerVars: {
-            autoplay: 1,
-            controls: 0,
-            disablekb: 1,
-            fs: 0,
-            iv_load_policy: 3,
-            modestbranding: 1,
-            rel: 0,
-            showinfo: 0,
-            playsinline: 1,
-            hl: 'pt',
-            cc_lang_pref: 'pt',
-            cc_load_policy: captionsEnabledRef.current ? 1 : 0,
-            ...(useChannelLiveStream ? { channel: cleanChannelId } : {}),
-            ...(!useChannelLiveStream && resumeSec > 0 ? { start: resumeSec } : {}),
-          },
-          events: {
-            onReady: (event: any) => {
-              if (!isComponentMountedRef.current) return;
-              setIsReady(true);
-              inspectLiveMetadata(event.target);
-              syncPlayerCaptions(event.target, captionsEnabledRef.current);
-              const total = Number(event.target.getDuration?.() || 0);
-              if (total > 0) {
-                durationRef.current = total;
-                setDuration(total);
-              }
-              try {
-                event.target.setVolume?.(100);
-                event.target.playVideo?.();
-                isPlayingRef.current = true;
-                setIsPlaying(true);
-                setHasStartedOnce(true);
-              } catch {
-                // ignore
-              }
+        try {
+          playerRef.current = new window.YT.Player(playerDiv, {
+            videoId: useChannelLiveStream ? 'live_stream' : cleanVideoId,
+            width: '100%',
+            height: '100%',
+            playerVars: {
+              autoplay: shouldAutoPlay ? 1 : 0,
+              controls: 0,
+              disablekb: 1,
+              fs: 0,
+              iv_load_policy: 3,
+              modestbranding: 1,
+              rel: 0,
+              showinfo: 0,
+              playsinline: 1,
+              hl: 'pt',
+              cc_lang_pref: 'pt',
+              cc_load_policy: ccPolicy,
+              ...(useChannelLiveStream ? { channel: cleanChannelId } : {}),
+              ...(!useChannelLiveStream && resumeSec > 0 ? { start: resumeSec } : {}),
             },
-            onStateChange: (event: any) => {
-              if (!isComponentMountedRef.current) return;
-              const YTState = window.YT?.PlayerState;
-              const state = event.data;
-
-              inspectLiveMetadata(event.target);
-
-              if (YTState && state === YTState.PLAYING) {
-                isPlayingRef.current = true;
-                hasStartedOnceRef.current = true;
-                setIsPlaying(true);
-                setHasStartedOnce(true);
-                setIsEnded(false);
+            events: {
+              onApiChange: (event: any) => {
+                if (!isComponentMountedRef.current) return;
+                syncPlayerCaptions(event.target, captionsEnabledRef.current);
+              },
+              onReady: (event: any) => {
+                if (!isComponentMountedRef.current) return;
+                isMountingPlayerRef.current = false;
+                setIsReady(true);
+                inspectLiveMetadata(event.target);
                 syncPlayerCaptions(event.target, captionsEnabledRef.current);
                 const total = Number(event.target.getDuration?.() || 0);
                 if (total > 0) {
                   durationRef.current = total;
                   setDuration(total);
                 }
-                if (suppressInitialControlsRef.current) {
-                  suppressInitialControlsRef.current = false;
-                  setControlsVisible(false);
-                } else {
-                  scheduleHideIn3Seconds(true);
+                try {
+                  if (isMutedRef.current || volumeRef.current === 0) {
+                    event.target.mute?.();
+                  } else {
+                    event.target.unMute?.();
+                    event.target.setVolume?.(volumeRef.current || 100);
+                  }
+                  if (playbackRateRef.current !== 1) {
+                    event.target.setPlaybackRate?.(playbackRateRef.current);
+                  }
+                  if (shouldAutoPlay) {
+                    event.target.playVideo?.();
+                    isPlayingRef.current = true;
+                    setIsPlaying(true);
+                    setHasStartedOnce(true);
+                  } else {
+                    if (resumeSec > 0) {
+                      event.target.seekTo?.(resumeSec, true);
+                    }
+                    event.target.pauseVideo?.();
+                    isPlayingRef.current = false;
+                    setIsPlaying(false);
+                    setHasStartedOnce(true);
+                  }
+                } catch {
+                  // ignore
                 }
-              } else if (YTState && state === YTState.PAUSED) {
-                isPlayingRef.current = false;
-                setIsPlaying(false);
-                clearHideTimer();
-                if (hasStartedOnceRef.current) {
+              },
+              onStateChange: (event: any) => {
+                if (!isComponentMountedRef.current) return;
+                const YTState = window.YT?.PlayerState;
+                const state = event.data;
+
+                inspectLiveMetadata(event.target);
+
+                if (YTState && state === YTState.PLAYING) {
+                  isPlayingRef.current = true;
+                  hasStartedOnceRef.current = true;
+                  setIsPlaying(true);
+                  setHasStartedOnce(true);
+                  setIsEnded(false);
+                  syncPlayerCaptions(event.target, captionsEnabledRef.current);
+                  const total = Number(event.target.getDuration?.() || 0);
+                  if (total > 0) {
+                    durationRef.current = total;
+                    setDuration(total);
+                  }
+                  if (
+                    suppressInitialControlsRef.current ||
+                    Date.now() < suppressControlsUntilRef.current ||
+                    !controlsVisibleRef.current
+                  ) {
+                    suppressInitialControlsRef.current = false;
+                    controlsVisibleRef.current = false;
+                    setControlsVisible(false);
+                  } else {
+                    scheduleHideIn3Seconds(true);
+                  }
+                } else if (YTState && state === YTState.PAUSED) {
+                  isPlayingRef.current = false;
+                  setIsPlaying(false);
+                  clearHideTimer();
+                  if (
+                    hasStartedOnceRef.current &&
+                    Date.now() >= suppressControlsUntilRef.current
+                  ) {
+                    controlsVisibleRef.current = true;
+                    setControlsVisible(true);
+                  }
+                  try {
+                    const curr = Number(event.target.getCurrentTime?.() || 0);
+                    const total = Number(
+                      event.target.getDuration?.() || durationRef.current || 0
+                    );
+                    if (curr > 0) {
+                      onTimeUpdateRef.current?.(curr, total, true);
+                    }
+                  } catch {
+                    // ignore
+                  }
+                } else if (YTState && state === YTState.ENDED) {
+                  isPlayingRef.current = false;
+                  setIsPlaying(false);
+                  setIsEnded(true);
+                  clearHideTimer();
                   setControlsVisible(true);
-                }
-                try {
-                  const curr = Number(event.target.getCurrentTime?.() || 0);
-                  const total = Number(
-                    event.target.getDuration?.() || durationRef.current || 0
-                  );
-                  if (curr > 0) {
-                    onTimeUpdateRef.current?.(curr, total, true);
+                  try {
+                    const curr = Number(event.target.getCurrentTime?.() || 0);
+                    const total = Number(
+                      event.target.getDuration?.() || durationRef.current || 0
+                    );
+                    if (curr > 0) {
+                      onTimeUpdateRef.current?.(curr, total, true);
+                    }
+                  } catch {
+                    // ignore
                   }
-                } catch {
-                  // ignore
-                }
-              } else if (YTState && state === YTState.ENDED) {
-                isPlayingRef.current = false;
-                setIsPlaying(false);
-                setIsEnded(true);
-                clearHideTimer();
-                setControlsVisible(true);
-                try {
-                  const curr = Number(event.target.getCurrentTime?.() || 0);
-                  const total = Number(
-                    event.target.getDuration?.() || durationRef.current || 0
-                  );
-                  if (curr > 0) {
-                    onTimeUpdateRef.current?.(curr, total, true);
+                } else if (YTState && state === YTState.BUFFERING) {
+                  const total = Number(event.target.getDuration?.() || 0);
+                  if (total > 0) {
+                    durationRef.current = total;
+                    setDuration(total);
                   }
-                } catch {
-                  // ignore
                 }
-              } else if (YTState && state === YTState.BUFFERING) {
-                const total = Number(event.target.getDuration?.() || 0);
-                if (total > 0) {
-                  durationRef.current = total;
-                  setDuration(total);
-                }
-              }
+              },
+              onError: (event: any) => {
+                isMountingPlayerRef.current = false;
+                console.warn('YouTube Player notice (code):', event?.data);
+              },
             },
-            onError: (event: any) => {
-              console.warn('YouTube Player notice (code):', event?.data);
-            },
-          },
-        });
-      } catch (err) {
-        console.warn('Erro ao inicializar YouTube Player:', err);
-      }
-    });
-  }, [
-    cleanVideoId,
-    cleanChannelId,
-    clearHideTimer,
-    scheduleHideIn3Seconds,
-    inspectLiveMetadata,
-    syncPlayerCaptions,
-  ]);
+          });
+        } catch (err) {
+          isMountingPlayerRef.current = false;
+          console.warn('Erro ao inicializar YouTube Player:', err);
+        }
+      });
+    },
+    [
+      cleanVideoId,
+      cleanChannelId,
+      clearHideTimer,
+      scheduleHideIn3Seconds,
+      inspectLiveMetadata,
+      syncPlayerCaptions,
+    ]
+  );
 
   // Poll current time & intercept end-of-video BEFORE YouTube shows end-screen links
   useEffect(() => {
@@ -740,6 +850,13 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
   const triggerEdgeDoubleClickSeek = useCallback(
     (side: 'left' | 'right') => {
       if (!isReady || isLiveModeRef.current) return;
+      suppressControlsUntilRef.current = Date.now() + 2200;
+      clearHideTimer();
+      setIsSpeedMenuOpen(false);
+      isSpeedMenuOpenRef.current = false;
+      controlsVisibleRef.current = false;
+      setControlsVisible(false);
+
       const delta = side === 'left' ? -10 : 10;
       skipSeconds(delta);
 
@@ -763,7 +880,7 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
         edgeClickRef.current.accumulatedSec = 0;
       }, 700);
     },
-    [isReady, skipSeconds]
+    [isReady, skipSeconds, clearHideTimer]
   );
 
   const handleVideoSurfacePointerClick = (
@@ -786,7 +903,7 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
       const now = Date.now();
       const timeSinceLast = now - edgeClickRef.current.lastTime;
 
-      if (edgeClickRef.current.side === side && timeSinceLast <= 330) {
+      if (edgeClickRef.current.side === side && timeSinceLast <= 380) {
         if (edgeClickRef.current.singleClickTimer !== null) {
           window.clearTimeout(edgeClickRef.current.singleClickTimer);
           edgeClickRef.current.singleClickTimer = null;
@@ -805,8 +922,11 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
       }
       edgeClickRef.current.singleClickTimer = window.setTimeout(() => {
         edgeClickRef.current.singleClickTimer = null;
+        if (Date.now() < suppressControlsUntilRef.current) {
+          return;
+        }
         handleVideoSurfaceClick();
-      }, 250);
+      }, 280);
       return;
     }
 
@@ -830,7 +950,33 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
     const nextEnabled = !captionsEnabled;
     setCaptionsEnabled(nextEnabled);
     captionsEnabledRef.current = nextEnabled;
-    syncPlayerCaptions(playerRef.current, nextEnabled);
+
+    const currentPlayer = playerRef.current;
+    if (currentPlayer) {
+      if (nextEnabled && mountedCcPolicyRef.current !== 1) {
+        let resumeAt = Math.floor(currentTimeRef.current || 0);
+        const wasPlaying = isPlayingRef.current;
+        try {
+          const liveCurr = Number(currentPlayer.getCurrentTime?.() || 0);
+          if (liveCurr > 0) {
+            resumeAt = Math.floor(liveCurr);
+            currentTimeRef.current = liveCurr;
+            setCurrentTime(liveCurr);
+          }
+          currentPlayer.destroy?.();
+        } catch {
+          // ignore destroy error
+        }
+        playerRef.current = null;
+        isMountingPlayerRef.current = false;
+        mountAndStartPlayer(resumeAt, wasPlaying);
+      } else {
+        syncPlayerCaptions(currentPlayer, nextEnabled);
+        if (!nextEnabled) {
+          mountedCcPolicyRef.current = 0;
+        }
+      }
+    }
 
     setCaptionToast(nextEnabled ? 'Legenda ativada' : 'Legenda desativada');
     if (captionToastTimerRef.current !== null) {
@@ -889,6 +1035,7 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
 
   const selectPlaybackSpeed = (rate: number) => {
     setPlaybackRate(rate);
+    playbackRateRef.current = rate;
     playerRef.current?.setPlaybackRate?.(rate);
     setIsSpeedMenuOpen(false);
     isSpeedMenuOpenRef.current = false;
@@ -946,7 +1093,7 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
   const isAnyFullscreen = isFullscreen || isPseudoFs;
   // Before the video starts (!hasStartedOnce), bottom controls are strictly hidden
   const isMenuVisible =
-    hasStartedOnce && (isEnded || controlsVisible || isSpeedMenuOpen);
+    hasStartedOnce && (isEnded || controlsVisible) && !isSpeedMenuOpen;
 
   const hasCustomThumbnail = Boolean(
     thumbnailUrl &&
@@ -972,8 +1119,8 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
           ref={mountNodeRef}
           className={`w-full pointer-events-none transition-all duration-200 ${
             captionsEnabled
-              ? 'h-[calc(100%+110px)] -mt-[60px]'
-              : 'h-[calc(100%+180px)] -mt-[90px]'
+              ? 'h-full mt-0'
+              : 'h-[calc(100%+120px)] -mt-[60px] sm:h-[calc(100%+160px)] sm:-mt-[80px]'
           }`}
         />
       </div>
@@ -1058,7 +1205,7 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
       <PlayerWatermark text={watermarkText || ''} />
 
       {/* Center Big Blue Play Button Overlay before video starts or when paused */}
-      {!isPlaying && !isEnded && (
+      {!isPlaying && !isEnded && !isSpeedMenuOpen && (
         <div
           onClick={(e) => {
             e.stopPropagation();
@@ -1069,6 +1216,63 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
         >
           <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-[#2563eb]/90 hover:bg-[#1d4ed8] active:scale-95 text-white flex items-center justify-center shadow-[0_8px_32px_rgba(37,99,235,0.6)] backdrop-blur-sm border border-white/20 transition-all group">
             <Play className="w-7 h-7 sm:w-9 sm:h-9 fill-current ml-1 group-hover:scale-110 transition-transform" />
+          </div>
+        </div>
+      )}
+
+      {/* Dedicated Speed Control Layer in Front of Video */}
+      {isSpeedMenuOpen && (
+        <div
+          onClick={(e) => {
+            e.stopPropagation();
+            setIsSpeedMenuOpen(false);
+            isSpeedMenuOpenRef.current = false;
+            scheduleHideIn3Seconds(isPlaying, false);
+          }}
+          onContextMenu={(e) => e.preventDefault()}
+          className="absolute inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-[270px] sm:max-w-xs rounded-2xl bg-[#0d1527]/95 border border-white/15 p-3 sm:p-4 shadow-2xl"
+          >
+            <div className="flex items-center justify-between mb-2.5 pb-2 border-b border-white/10">
+              <span className="text-xs sm:text-sm font-bold text-white tracking-wide">
+                Velocidade de reprodução
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSpeedMenuOpen(false);
+                  isSpeedMenuOpenRef.current = false;
+                  scheduleHideIn3Seconds(isPlaying, false);
+                }}
+                className="w-7 h-7 rounded-lg bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+                aria-label="Fechar controle de velocidade"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-3 gap-1.5 sm:gap-2">
+              {SPEED_OPTIONS.map((rate) => {
+                const active = playbackRate === rate;
+                return (
+                  <button
+                    key={rate}
+                    type="button"
+                    onClick={() => selectPlaybackSpeed(rate)}
+                    className={`py-2 px-2.5 rounded-xl text-xs sm:text-sm font-mono tabular-nums font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      active
+                        ? 'bg-[#2563eb] text-white shadow-[0_0_14px_rgba(37,99,235,0.55)] ring-1 ring-blue-400/50'
+                        : 'bg-white/10 hover:bg-white/15 text-slate-200 hover:text-white border border-white/5'
+                    }`}
+                  >
+                    <span>{rate}x</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}
@@ -1302,42 +1506,18 @@ export const StealthVideoPlayer: React.FC<StealthVideoPlayerProps> = ({
               </span>
             </button>
 
-            <div className="relative">
-              <button
-                type="button"
-                onClick={toggleSpeedMenu}
-                className={`min-h-10 px-2.5 py-1.5 rounded-lg text-xs font-mono tabular-nums font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center justify-center ${
-                  isSpeedMenuOpen
-                    ? 'bg-[#2563eb] text-white'
-                    : 'bg-white/10 hover:bg-white/15 text-slate-200'
-                }`}
-                title="Velocidade de reprodução"
-              >
-                {playbackRate}x
-              </button>
-
-              {isSpeedMenuOpen && (
-                <div className="absolute bottom-full right-0 mb-2 w-24 max-h-44 overflow-y-auto rounded-xl bg-[#0d1527] border border-white/15 py-1.5 shadow-2xl z-50">
-                  {SPEED_OPTIONS.map((rate) => (
-                    <button
-                      key={rate}
-                      type="button"
-                      onClick={() => selectPlaybackSpeed(rate)}
-                      className={`w-full px-3 py-1.5 text-left text-xs font-mono tabular-nums flex items-center justify-between transition-colors cursor-pointer ${
-                        playbackRate === rate
-                          ? 'bg-[#2563eb]/30 text-white font-bold'
-                          : 'text-slate-300 hover:bg-white/10 hover:text-white'
-                      }`}
-                    >
-                      <span>{rate}x</span>
-                      {playbackRate === rate && (
-                        <span className="w-1.5 h-1.5 rounded-full bg-[#3b82f6]" />
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <button
+              type="button"
+              onClick={toggleSpeedMenu}
+              className={`min-h-10 px-2.5 py-1.5 rounded-lg text-xs font-mono tabular-nums font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center justify-center ${
+                isSpeedMenuOpen
+                  ? 'bg-[#2563eb] text-white'
+                  : 'bg-white/10 hover:bg-white/15 text-slate-200'
+              }`}
+              title="Velocidade de reprodução"
+            >
+              {playbackRate}x
+            </button>
 
             {onToggleTheaterMode && (
               <button
